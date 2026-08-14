@@ -1,4 +1,4 @@
-# Python
+# Python virtual environments & bytecode
 .venv/
 venv/
 ENV/
@@ -8,24 +8,9 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 .pytest_cache/
 
-# Node.js / Next.js
+# Node.js / Next.js build artifacts
 node_modules/
 .next/
 out/
@@ -57,7 +42,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# IDE & Editor
+# IDE & OS
 .vscode/
 .idea/
 *.swp
