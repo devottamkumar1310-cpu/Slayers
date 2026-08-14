@@ -612,3 +612,79 @@ class TestProjectAPI:
         res = client.patch("/api/assets/any-id/status", json={"status": "invalid_value"})
         # 404 on missing asset before 422 — either is acceptable
         assert res.status_code in (404, 422)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. FAULT-INJECTION PIPELINE INTEGRATION TEST
+# ─────────────────────────────────────────────────────────────────────────────
+class TestFaultInjectionPipeline:
+    def test_pipeline_recovers_from_provider_fault(self, client, db):
+        """
+        Dedicated fault-injection integration test:
+        1. Run the real pipeline.
+        2. Make one provider raise a simulated TimeoutError/RequestError.
+        3. Verify the pipeline still completes.
+        4. Verify the failed provider appears in job.warnings.
+        5. Verify successful providers still produce assets.
+        6. Verify job.provider_stats is persisted.
+        7. Verify final project status is 'completed'.
+        """
+        from app.models.models import Project, ProcessingJob, Asset, ContentSegment
+        from app.workers.pipeline_worker import process_project_pipeline
+        from app.services.providers.wikimedia import WikimediaProvider
+        import asyncio
+
+        # Create project in DB
+        project = Project(
+            name="Fault Injection Test Project",
+            source_type="script",
+            source_text="The AI coding tools are transforming software engineering rapidly.",
+            status="draft",
+        )
+        db.add(project)
+        db.commit()
+        db.refresh(project)
+
+        # Patch Wikimedia to simulate a TimeoutError during asset discovery, and WebSearch to return a successful asset
+        from app.services.providers.base import DiscoveredAssetCandidate
+        from app.services.providers.web_search import WebSearchProvider
+
+        mock_asset = DiscoveredAssetCandidate(
+            title="Wikipedia Software Engineering Reference",
+            source="Wikipedia",
+            source_url="https://en.wikipedia.org/wiki/Software_engineering",
+            asset_url="https://upload.wikimedia.org/sample.jpg",
+            asset_type="image",
+            license_info="CC BY-SA",
+            provider_id="wikipedia:999",
+        )
+
+        with patch.object(WikimediaProvider, "search", side_effect=asyncio.TimeoutError("Simulated Wikimedia API Timeout")), \
+             patch.object(WebSearchProvider, "search", AsyncMock(return_value=[mock_asset])):
+            asyncio.get_event_loop().run_until_complete(process_project_pipeline(project.id))
+
+        # Re-fetch state from DB
+        db.expire_all()
+        updated_project = db.query(Project).filter(Project.id == project.id).first()
+        job = db.query(ProcessingJob).filter(ProcessingJob.project_id == project.id).first()
+        assets = db.query(Asset).join(Asset.requirement).join(ContentSegment).filter(ContentSegment.project_id == project.id).all()
+
+        # Assertions
+        assert updated_project.status == "completed"
+        assert job.status == "completed"
+        assert job.progress == 100
+
+        # Failed provider recorded in warnings
+        assert job.warnings is not None
+        assert len(job.warnings) > 0
+        assert any("Wikimedia Commons" in w for w in job.warnings)
+
+        # Successful provider still produced assets
+        assert len(assets) > 0
+
+        # Provider stats persisted
+        assert job.provider_stats is not None
+        assert isinstance(job.provider_stats, dict)
+        assert job.provider_stats.get("Web & Brand Reference", 0) > 0
+
+
