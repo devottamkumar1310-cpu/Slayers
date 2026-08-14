@@ -110,11 +110,12 @@ class AssetDiscoveryEngine:
                 if url_key in seen_urls:
                     continue
                 seen_urls.add(url_key)
-                # Deduplicate by provider_id
-                if c.provider_id and c.provider_id in seen_provider_ids:
+                # Deduplicate by (provider_name, provider_id)
+                dedup_key = (name, c.provider_id)
+                if c.provider_id and dedup_key in seen_provider_ids:
                     continue
                 if c.provider_id:
-                    seen_provider_ids.add(c.provider_id)
+                    seen_provider_ids.add(dedup_key)
                 all_candidates.append(c)
                 accepted += 1
             stats["found"][name] = accepted
@@ -150,11 +151,5 @@ class AssetDiscoveryEngine:
         # Cap result set
         scored = scored[: settings.MAX_ASSETS_PER_REQUIREMENT]
 
-        # Ensure top item is "recommended" if it cleared alternative threshold
-        if scored:
-            scored[0]["status"] = "recommended"
-            for item in scored[1:]:
-                if item["status"] == "recommended":
-                    item["status"] = "alternative"
-
         return scored, stats
+

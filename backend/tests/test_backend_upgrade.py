@@ -358,25 +358,78 @@ class TestAssetDiscoveryEngine:
         assert len(urls) == len(set(urls))
 
     def test_deduplication_by_provider_id(self):
-        cand1 = self._candidate("Asset A", "https://example.com/a.jpg", "pexels:1")
-        cand2 = self._candidate("Asset A copy", "https://example.com/b.jpg", "pexels:1")
+        """Identical provider_ids from the SAME provider must be deduplicated."""
+        cand1 = self._candidate("Asset A", "https://example.com/a.jpg", "1")
+        cand2 = self._candidate("Asset A copy", "https://example.com/b.jpg", "1")
 
-        call_count = [0]
         async def mock_search(q, t, limit=5):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return [cand1]
-            return [cand2]
+            return [cand1, cand2]
 
-        for p in self.engine.providers:
-            p.search = mock_search
+        self.engine.providers[0].search = mock_search
+        for p in self.engine.providers[1:]:
+            p.search = AsyncMock(return_value=[])
 
         req = {"asset_type": "image", "search_query": "test"}
         result, _ = asyncio.get_event_loop().run_until_complete(
             self.engine.discover_for_requirement(req, "")
         )
         provider_ids = [r["provider_id"] for r in result if r.get("provider_id")]
-        assert len(provider_ids) == len(set(provider_ids))
+        assert len(provider_ids) == 1
+
+
+    def test_deduplication_scoped_by_provider_name(self):
+        """Identical provider_ids from DIFFERENT providers must not be discarded."""
+        from app.services.providers.base import DiscoveredAssetCandidate
+
+        c1 = DiscoveredAssetCandidate(
+            title="Wikimedia Asset", source="Wikimedia Commons", source_url="https://a.com",
+            asset_url="https://a.com/img.jpg", asset_type="image", license_info="CC", provider_id="100"
+        )
+        c2 = DiscoveredAssetCandidate(
+            title="Pexels Asset", source="Pexels", source_url="https://b.com",
+            asset_url="https://b.com/img.jpg", asset_type="image", license_info="Free", provider_id="100"
+        )
+
+        async def provider_a_search(q, t, limit=5):
+            return [c1]
+
+        async def provider_b_search(q, t, limit=5):
+            return [c2]
+
+        self.engine.providers[0].search = provider_a_search
+        self.engine.providers[1].search = provider_b_search
+        for p in self.engine.providers[2:]:
+            p.search = AsyncMock(return_value=[])
+
+        req = {"asset_type": "image", "search_query": "test"}
+        result, _ = asyncio.get_event_loop().run_until_complete(
+            self.engine.discover_for_requirement(req, "")
+        )
+        # Both candidates should be retained
+        urls = [r["asset_url"] for r in result]
+        assert "https://a.com/img.jpg" in urls
+        assert "https://b.com/img.jpg" in urls
+
+    def test_low_score_not_promoted_to_recommended(self):
+        """A candidate scoring < 55 should stay flagged and not be falsely promoted to recommended."""
+        cand = self._candidate("Unrelated Query Match", "https://example.com/unrelated.jpg")
+
+        async def mock_search(q, t, limit=5):
+            return [cand]
+
+        for p in self.engine.providers:
+            p.search = mock_search
+
+        # Mock scorer to return a low score of 43 and status "flagged"
+        with patch.object(self.engine.scorer, "score", return_value=(43, "Low score", "flagged")):
+            req = {"asset_type": "stock_footage", "search_query": "quantum computing"}
+            result, _ = asyncio.get_event_loop().run_until_complete(
+                self.engine.discover_for_requirement(req, "narrration")
+            )
+            assert len(result) == 1
+            assert result[0]["status"] == "flagged"
+            assert result[0]["relevance_score"] == 43
+
 
     def test_provider_failure_does_not_crash(self):
         import asyncio as aio
