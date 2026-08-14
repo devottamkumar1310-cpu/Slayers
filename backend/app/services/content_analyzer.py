@@ -1,164 +1,257 @@
+"""
+Content Analyzer — Step 1 of the SLAYERS pipeline.
+
+Responsibilities:
+- Accepts raw script / transcript / text
+- Returns a list of normalized ContentSegment dicts
+- Tries Gemini first (with retry + JSON repair); falls back to heuristic engine
+- All output is validated against the SegmentSchema before returning
+
+Heuristic engine handles:
+  - Timestamped lines  (00:00, [00:15], etc.)
+  - Numbered lists     (1. ..., Scene 3: ...)
+  - Double-newline paragraphs
+  - Single-sentence splitting
+
+Intent detection covers 14 visual categories.
+"""
+from __future__ import annotations
+
 import re
 import json
 import logging
-from typing import List, Dict, Any
+import asyncio
+from typing import List, Dict, Any, Optional
+
+from pydantic import BaseModel, field_validator
 from app.core.config import settings
 
 logger = logging.getLogger("slayers.content_analyzer")
 
+# ── Valid intent categories ───────────────────────────────────────────────────
+VALID_INTENTS = {
+    "stock_footage", "product_ui", "website", "screenshot", "person",
+    "location", "news_reference", "historical", "data_visualization",
+    "diagram", "illustration", "screen_recording", "logo", "document",
+    "abstract_broll", "no_visual_required",
+}
+VALID_IMPORTANCES = {"high", "medium", "low"}
+_TIME_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?$")
+
+
+class SegmentSchema(BaseModel):
+    """Validates and normalizes a single segment dict."""
+    sequence: int
+    start_time: str = "00:00"
+    end_time: str = "00:05"
+    text: str
+    scene_description: str = ""
+    visual_intent: str = "stock_footage"
+    importance: str = "medium"
+
+    @field_validator("visual_intent")
+    @classmethod
+    def coerce_intent(cls, v: str) -> str:
+        return v if v in VALID_INTENTS else "stock_footage"
+
+    @field_validator("importance")
+    @classmethod
+    def coerce_importance(cls, v: str) -> str:
+        return v if v in VALID_IMPORTANCES else "medium"
+
+    @field_validator("text")
+    @classmethod
+    def require_text(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Segment text must not be empty")
+        return v
+
+
+# ── Heuristic intent rules (ordered: first match wins) ───────────────────────
+_INTENT_RULES: List[tuple] = [
+    # highest specificity first
+    (r"\b(screencast|walkthrough|live demo|demo video|screen recording)\b",          "screen_recording"),
+    (r"\b(ui|interface|dashboard|app|tool|software|click|button|feature|toggle|menu|settings|plugin|extension)\b",  "product_ui"),
+    (r"\b(website|site|url|page|online|browser|domain|landing page|homepage|webapp)\b", "website"),
+    (r"\b(chart|graph|metric|percentage|percent|revenue|kpi|analytics|statistic|growth rate|data)\b", "data_visualization"),
+    (r"\b(architecture|flowchart|system diagram|pipeline|infrastructure|database schema|er diagram)\b", "diagram"),
+    (r"\b(logo|brand|icon|trademark|wordmark|symbol)\b",                             "logo"),
+    (r"\b(screenshot|screen capture|print screen)\b",                               "screenshot"),
+    (r"\b(document|whitepaper|pdf|report|contract|guide|manual)\b",                 "document"),
+    (r"\b(illustration|drawing|cartoon|sketch|concept art|vector|render)\b",        "illustration"),
+    (r"\b(news|headline|breaking|press release|announcement|media coverage)\b",     "news_reference"),
+    (r"\b(history|historical|archive|past|vintage|ancient|century|decade|origin)\b", "historical"),
+    (r"\b(developer|engineer|designer|founder|ceo|person|team|user|customer|speaker|researcher)\b", "person"),
+    (r"\b(city|office|building|campus|country|location|headquarters|studio|lab|workplace)\b", "location"),
+]
+
+# Words per second reading speed for heuristic timestamps
+_WPS = 2.5
+
+
 class ContentAnalyzer:
-    """Analyzes scripts/transcripts into scenes and initial visual intents."""
+    """Analyzes scripts/transcripts into structured content segments."""
 
     async def analyze(self, source_text: str) -> List[Dict[str, Any]]:
         source_text = source_text.strip()
         if not source_text:
             return []
 
-        # 1. Try Gemini API if key is configured
-        if settings.GEMINI_API_KEY:
-            try:
-                gemini_res = await self._analyze_with_gemini(source_text)
-                if gemini_res and len(gemini_res) > 0:
-                    return gemini_res
-            except Exception as e:
-                logger.warning(f"Gemini analysis failed, falling back to rule-based engine: {e}")
+        # Truncate if too long
+        if len(source_text) > settings.MAX_SOURCE_TEXT_LENGTH:
+            source_text = source_text[: settings.MAX_SOURCE_TEXT_LENGTH]
+            logger.warning("Source text truncated to %d chars", settings.MAX_SOURCE_TEXT_LENGTH)
 
-        # 2. Heuristic NLP Segmentation Engine (Fast, local, robust fallback)
+        # ── Try Gemini (with retry) ───────────────────────────────────────────
+        if settings.GEMINI_API_KEY and settings.AI_PROVIDER != "heuristic":
+            for attempt in range(2):
+                try:
+                    segments = await self._analyze_with_gemini(source_text)
+                    if segments:
+                        logger.info("Gemini segmentation produced %d segments", len(segments))
+                        return segments
+                except Exception as e:
+                    logger.warning("Gemini attempt %d failed: %s", attempt + 1, e)
+                    if attempt == 0:
+                        await asyncio.sleep(1.5)
+
+        # ── Heuristic fallback ────────────────────────────────────────────────
+        logger.info("Using heuristic segmentation engine")
         return self._heuristic_segmentation(source_text)
 
+    # ── Gemini path ───────────────────────────────────────────────────────────
     async def _analyze_with_gemini(self, text: str) -> List[Dict[str, Any]]:
         import google.generativeai as genai
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel("gemini-1.5-flash")
 
-        prompt = f"""
-You are the SLAYERS visual analysis engine for video editing.
-Segment the following video script/transcript into distinct narrative scenes (typically 2-4 sentences per scene).
+        prompt = (
+            "You are the SLAYERS Visual Analysis Engine for video editing.\n"
+            "Segment the following script into 3–8 distinct narrative scenes "
+            "(typically 2–4 sentences per scene).\n\n"
+            "For each scene output a JSON object with exactly these fields:\n"
+            "  sequence (int, starting at 1)\n"
+            "  start_time (\"MM:SS\")\n"
+            "  end_time   (\"MM:SS\")\n"
+            "  text       (exact narration text)\n"
+            "  scene_description (visual summary, ≤120 chars)\n"
+            f"  visual_intent (one of: {', '.join(sorted(VALID_INTENTS))})\n"
+            "  importance (\"high\" | \"medium\" | \"low\")\n\n"
+            "Return ONLY a valid JSON array — no markdown, no commentary.\n\n"
+            f'Script:\n"""\n{text}\n"""'
+        )
 
-For each scene, output a JSON object with:
-- sequence: integer starting at 1
-- start_time: string timestamp e.g. "00:00"
-- end_time: string timestamp e.g. "00:08"
-- text: exact narration text for this segment
-- scene_description: visual context summary of what is discussed
-- visual_intent: one of [stock_footage, product_ui, website, screenshot, person, location, news_reference, historical, data_visualization, diagram, illustration, screen_recording, logo, document, abstract_broll, no_visual_required]
-- importance: "high", "medium", or "low"
-
-Script to analyze:
-\"\"\"
-{text}
-\"\"\"
-
-Return ONLY a valid JSON array of objects without markdown formatting or commentary.
-"""
         response = model.generate_content(prompt)
-        raw_text = response.text.strip()
-        
-        # Clean markdown codeblocks if wrapped
-        if raw_text.startswith("```"):
-            raw_text = re.sub(r"^```(json)?\n?", "", raw_text)
-            raw_text = re.sub(r"\n?```$", "", raw_text)
+        raw = response.text.strip()
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
 
-        parsed = json.loads(raw_text)
-        if isinstance(parsed, list) and len(parsed) > 0:
-            return parsed
-        return []
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            raise ValueError("Gemini did not return a JSON array")
 
+        return self._validate_segments(parsed)
+
+    # ── Heuristic engine ──────────────────────────────────────────────────────
     def _heuristic_segmentation(self, text: str) -> List[Dict[str, Any]]:
-        # Normalize line endings
         text = text.replace("\r\n", "\n").replace("\r", "\n")
+        paragraphs = self._split_into_paragraphs(text)
+        return self._validate_segments(self._paragraphs_to_dicts(paragraphs))
 
-        # 1. Check for timestamped lines e.g. "00:00 Intro text" or "[00:15] ..."
-        timestamp_pattern = r'(?:^|\n)(?:\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?)\s*[-:]?\s*(.+?)(?=(?:\n\[?\d{1,2}:\d{2})|$)'
-        ts_matches = re.findall(timestamp_pattern, text, re.DOTALL)
-        
-        raw_paragraphs = []
+    def _split_into_paragraphs(self, text: str) -> List[str]:
+        # 1. Timestamped lines: "00:00 Intro..." or "[01:15] ..."
+        ts_pattern = re.compile(
+            r"(?:^|\n)\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?\s*[-:]?\s*(.+?)(?=\n\[?\d{1,2}:\d{2}|$)",
+            re.DOTALL,
+        )
+        ts_matches = ts_pattern.findall(text)
         if len(ts_matches) >= 2:
-            for ts, content in ts_matches:
-                if content.strip():
-                    raw_paragraphs.append(content.strip())
-        else:
-            # 2. Check for numbered lines e.g. "1. ..." or "Scene 1: ..."
-            numbered_pattern = r'(?:^|\n)(?:(?:Scene\s*)?\d+[\.:\)]\s*)(.+?)(?=(?:\n(?:Scene\s*)?\d+[\.:\)])|$)'
-            num_matches = re.findall(numbered_pattern, text, re.DOTALL | re.IGNORECASE)
-            if len(num_matches) >= 2:
-                for content in num_matches:
-                    if content.strip():
-                        raw_paragraphs.append(content.strip())
+            return [c.strip() for _, c in ts_matches if c.strip()]
 
-        if not raw_paragraphs:
-            # Split by double/single newlines
-            raw_paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+        # 2. Numbered entries: "1. ...", "Scene 2: ..."
+        num_pattern = re.compile(
+            r"(?:^|\n)(?:(?:Scene\s*)?\d+[.:\)]\s*)(.+?)(?=\n(?:Scene\s*)?\d+[.:\)]|$)",
+            re.DOTALL | re.IGNORECASE,
+        )
+        num_matches = num_pattern.findall(text)
+        if len(num_matches) >= 2:
+            return [m.strip() for m in num_matches if m.strip()]
 
-        if len(raw_paragraphs) < 2:
-            # Split sentences using punctuation
-            sentences = re.split(r'(?<=[.!?])\s+', text)
-            raw_paragraphs = []
-            chunk = []
-            for s in sentences:
-                if s.strip():
-                    chunk.append(s.strip())
-                if len(chunk) >= 2:
-                    raw_paragraphs.append(" ".join(chunk))
-                    chunk = []
-            if chunk:
-                raw_paragraphs.append(" ".join(chunk))
+        # 3. Double-newline paragraphs
+        paras = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
+        if len(paras) >= 2:
+            return paras
 
-        if not raw_paragraphs and text.strip():
-            raw_paragraphs = [text.strip()]
+        # 4. Single-newline lines
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if len(lines) >= 2:
+            return lines
 
-        segments = []
-        current_seconds = 0
-        
-        # Comprehensive intent detection rules
-        intent_rules = [
-            (r'\b(ui|interface|dashboard|app|tool|software|screen|click|button|feature|toggle|menu|settings)\b', 'product_ui'),
-            (r'\b(website|site|url|page|online|browser|domain|landing page)\b', 'website'),
-            (r'\b(chart|graph|statistic|data|metric|percentage|percent|increase|growth|number|revenue|kpi|analytics)\b', 'data_visualization'),
-            (r'\b(logo|brand|icon|symbol|company|trademark)\b', 'logo'),
-            (r'\b(developer|coder|person|engineer|team|founder|ceo|speaker|user|customer|audience)\b', 'person'),
-            (r'\b(history|historical|past|century|decade|vintage|ancient|archive|origin)\b', 'historical'),
-            (r'\b(news|headline|report|article|press|breaking|announcement|media)\b', 'news_reference'),
-            (r'\b(diagram|architecture|flowchart|structure|system|pipeline|database|infrastructure)\b', 'diagram'),
-            (r'\b(document|paper|pdf|contract|file|whitepaper|report|guide)\b', 'document'),
-            (r'\b(illustration|drawing|cartoon|sketch|render|concept art|vector)\b', 'illustration'),
-            (r'\b(recording|walkthrough|screencast|live demo|demo video)\b', 'screen_recording'),
-            (r'\b(city|office|building|world|location|country|headquarters|lab|studio)\b', 'location'),
-        ]
+        # 5. Sentence chunking (every 2 sentences)
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        chunks, buf = [], []
+        for s in sentences:
+            if s.strip():
+                buf.append(s.strip())
+            if len(buf) >= 2:
+                chunks.append(" ".join(buf))
+                buf = []
+        if buf:
+            chunks.append(" ".join(buf))
+        if chunks:
+            return chunks
 
-        for idx, paragraph in enumerate(raw_paragraphs, start=1):
-            word_count = len(paragraph.split())
-            duration_secs = max(5, int(word_count / 2.5))
-            
-            start_min, start_sec = divmod(current_seconds, 60)
-            end_min, end_sec = divmod(current_seconds + duration_secs, 60)
-            
-            start_str = f"{start_min:02d}:{start_sec:02d}"
-            end_str = f"{end_min:02d}:{end_sec:02d}"
-            
-            current_seconds += duration_secs
-            
-            # Detect visual intent
-            detected_intent = 'stock_footage'
-            for pattern, intent in intent_rules:
-                if re.search(pattern, paragraph, re.IGNORECASE):
-                    detected_intent = intent
-                    break
+        return [text.strip()]
 
-            scene_desc = f"Visual representation of: {paragraph[:80]}..."
-            if len(paragraph) <= 80:
-                scene_desc = f"Visual representation of: {paragraph}"
+    def _paragraphs_to_dicts(self, paragraphs: List[str]) -> List[Dict[str, Any]]:
+        result = []
+        current_secs = 0
+        capped = paragraphs[: settings.MAX_SEGMENTS]
 
-            importance = "high" if detected_intent in ("product_ui", "data_visualization", "logo") or idx == 1 else "medium"
+        for idx, para in enumerate(capped, start=1):
+            words = len(para.split())
+            duration = max(4, int(words / _WPS))
+            s_min, s_sec = divmod(current_secs, 60)
+            e_min, e_sec = divmod(current_secs + duration, 60)
+            current_secs += duration
 
-            segments.append({
+            intent = self._detect_intent(para)
+            importance = "high" if (intent in ("product_ui", "data_visualization", "logo") or idx == 1) else "medium"
+            desc = para[:120] + ("…" if len(para) > 120 else "")
+
+            result.append({
                 "sequence": idx,
-                "start_time": start_str,
-                "end_time": end_str,
-                "text": paragraph,
-                "scene_description": scene_desc,
-                "visual_intent": detected_intent,
-                "importance": importance
+                "start_time": f"{s_min:02d}:{s_sec:02d}",
+                "end_time":   f"{e_min:02d}:{e_sec:02d}",
+                "text": para,
+                "scene_description": f"Visual for: {desc}",
+                "visual_intent": intent,
+                "importance": importance,
             })
+        return result
 
-        return segments
+    def _detect_intent(self, text: str) -> str:
+        for pattern, intent in _INTENT_RULES:
+            if re.search(pattern, text, re.IGNORECASE):
+                return intent
+        return "stock_footage"
+
+    # ── Validation ────────────────────────────────────────────────────────────
+    def _validate_segments(self, raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        validated = []
+        for i, seg in enumerate(raw, start=1):
+            try:
+                obj = SegmentSchema(
+                    sequence=seg.get("sequence", i),
+                    start_time=seg.get("start_time", "00:00"),
+                    end_time=seg.get("end_time", "00:05"),
+                    text=seg.get("text", ""),
+                    scene_description=seg.get("scene_description", ""),
+                    visual_intent=seg.get("visual_intent", "stock_footage"),
+                    importance=seg.get("importance", "medium"),
+                )
+                validated.append(obj.model_dump())
+            except Exception as e:
+                logger.warning("Skipping invalid segment at index %d: %s", i, e)
+        return validated
