@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api"
     
     DATABASE_URL: str = "sqlite:///./slayers.db"
+    FRONTEND_URL: str = ""
+    PORT: int = 8000
     
     # Provider keys
     AI_PROVIDER: str = "auto"  # 'gemini', 'openai', or 'heuristic'

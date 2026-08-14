@@ -121,9 +121,55 @@ Frontend will be live at `http://localhost:3000`.
 
 ---
 
+## ☁️ Production Deployment Guide
+
+SLAYERS is structured as a clean separation: `frontend/` (Next.js) and `backend/` (FastAPI).
+
+### A. Frontend Deployment (Vercel)
+
+When deploying to Vercel, configure the project settings:
+
+| Setting | Value |
+|---|---|
+| **Framework Preset** | `Next.js` |
+| **Root Directory** | `frontend` |
+| **Build Command** | `npm run build` (default) |
+| **Output Directory** | `.next` (default) |
+| **Install Command** | `npm install` (default) |
+
+#### Frontend Production Environment Variables:
+```env
+NEXT_PUBLIC_API_URL="https://your-backend-domain.com"
+```
+*(The API client automatically normalizes trailing slashes and routes requests to `/api/...`)*
+
+---
+
+### B. Backend Deployment (Render / Railway / Fly.io / Cloud Run)
+
+When deploying the FastAPI backend:
+
+| Setting | Value |
+|---|---|
+| **Root Directory** | `backend` |
+| **Build Command** | `pip install -r requirements.txt` |
+| **Start Command** | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+
+#### Backend Production Environment Variables:
+```env
+FRONTEND_URL="https://your-frontend-domain.vercel.app"
+DATABASE_URL="postgresql://user:password@host:port/dbname" # or SQLite default
+AI_PROVIDER="auto"
+GEMINI_API_KEY=""        # Optional
+PEXELS_API_KEY=""        # Optional
+UNSPLASH_ACCESS_KEY=""   # Optional
+```
+
+---
+
 ## 🔑 Environment Configuration
 
-SLAYERS works **out-of-the-box with zero API keys required**, using Wikimedia Commons API and local NLP intent rules!
+SLAYERS works **out-of-the-box with zero API keys required**, using Wikimedia Commons REST API and local NLP intent rules!
 
 To enable LLM-powered segmentation or premium stock providers, populate `.env`:
 
@@ -134,6 +180,7 @@ OPENAI_API_KEY=""           # Optional OpenAI key
 PEXELS_API_KEY=""           # Optional Pexels stock key
 UNSPLASH_ACCESS_KEY=""      # Optional Unsplash key
 DATABASE_URL="sqlite:///./slayers.db"
+FRONTEND_URL=""             # Production frontend domain
 ```
 
 ---
@@ -162,7 +209,7 @@ To execute the backend test suite:
 
 ```bash
 cd backend
-.venv/Scripts/pytest tests
+.venv/Scripts/pytest tests -v
 ```
 
 Test suite covers:
@@ -171,6 +218,7 @@ Test suite covers:
 - `test_scoring.py`: 0–100 relevance score bounds and rationale generation.
 - `test_api.py`: FastAPI endpoints and demo project creation.
 - `test_failure_handling.py`: Malformed inputs, empty scripts, and invalid IDs.
+- `test_extended_audit.py`: Multi-format script parsing, expanded intent categories, and parallel asset discovery.
 
 ---
 
