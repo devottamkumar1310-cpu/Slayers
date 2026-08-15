@@ -1,110 +1,129 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Project } from '@/types';
-import { api } from '@/lib/api';
-import { Layers, PlusCircle, ArrowRight, Clock, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import type { Project } from '@/types';
+import { api, ApiError } from '@/lib/api';
+import { formatDate } from '@/lib/format';
+import ErrorNotice from '@/components/ErrorNotice';
+import StatusDot from '@/components/StatusDot';
 
-export default function ProjectsListPage() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function ProjectsIndexPage() {
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.listProjects()
-      .then(setProjects)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      setProjects(await api.listProjects());
+    } catch (err) {
+      setProjects(null);
+      setError(err instanceof ApiError ? err.message : 'Could not load your boards.');
+    }
   }, []);
 
-  return (
-    <div className="space-y-8 py-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-extrabold text-white">Visual Asset Projects</h1>
-          <p className="text-sm text-gray-400">All your analyzed scripts and organized visual packages.</p>
-        </div>
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-        <Link
-          href="/projects/new"
-          className="inline-flex items-center space-x-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 px-4 py-2.5 rounded-xl shadow-lg shadow-blue-600/25 transition active:scale-95"
-        >
-          <PlusCircle className="w-4 h-4" />
-          <span>New Project</span>
+  return (
+    <div className="py-10">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-6">
+        <div>
+          <p className="eyebrow">Index</p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-bone">Boards</h1>
+        </div>
+        <Link href="/projects/new" className="btn-primary">
+          New script
         </Link>
       </div>
 
-      {loading ? (
-        <div className="py-20 text-center space-y-3">
-          <Loader2 className="w-8 h-8 text-blue-400 animate-spin mx-auto" />
-          <p className="text-sm text-gray-400">Loading projects...</p>
+      {error ? (
+        <div className="max-w-xl py-10">
+          <ErrorNotice message={error} onRetry={load} />
         </div>
+      ) : projects === null ? (
+        <ul className="divide-y divide-lineSoft border-b border-line" aria-busy="true">
+          {[0, 1, 2].map((i) => (
+            <li key={i} className="flex items-center gap-4 py-5">
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-line" />
+              <span className="h-3 w-1/3 animate-pulse bg-line" />
+              <span className="ml-auto h-3 w-16 animate-pulse bg-line" />
+            </li>
+          ))}
+          <li className="sr-only">Loading boards…</li>
+        </ul>
       ) : projects.length === 0 ? (
-        <div className="bg-surface border border-surfaceBorder rounded-2xl p-12 text-center space-y-4">
-          <Layers className="w-12 h-12 text-gray-600 mx-auto" />
-          <div className="space-y-1">
-            <h3 className="text-lg font-bold text-white">No Projects Found</h3>
-            <p className="text-sm text-gray-400">Get started by creating your first visual asset package project.</p>
-          </div>
-          <Link
-            href="/projects/new"
-            className="inline-flex items-center space-x-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded-xl transition"
-          >
-            <span>Create Visual Package</span>
-            <ArrowRight className="w-4 h-4" />
+        <div className="border border-dashed border-line px-6 py-16 text-center">
+          <p className="eyebrow">Nothing here yet</p>
+          <p className="mx-auto mt-4 max-w-md text-sm leading-relaxed text-muted">
+            Paste a script and SLAYERS will break it into scenes, work out what each one
+            needs to show, and go find it.
+          </p>
+          <Link href="/projects/new" className="btn-primary mt-6">
+            Start with a script
           </Link>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map((project) => (
-            <Link
-              key={project.id}
-              href={`/projects/${project.id}`}
-              className="bg-surface border border-surfaceBorder hover:border-gray-600 rounded-2xl p-6 transition space-y-4 flex flex-col justify-between group"
-            >
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 bg-blue-500/10 px-2.5 py-0.5 rounded border border-blue-500/20">
-                    {project.source_type}
-                  </span>
-                  {project.status === 'completed' ? (
-                    <span className="inline-flex items-center space-x-1 text-[11px] font-medium text-emerald-400">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Ready</span>
-                    </span>
-                  ) : project.status === 'processing' ? (
-                    <span className="inline-flex items-center space-x-1 text-[11px] font-medium text-blue-400">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Processing</span>
-                    </span>
-                  ) : (
-                    <span className="text-[11px] text-gray-500 uppercase">{project.status}</span>
-                  )}
-                </div>
+        <>
+          <p className="py-4 font-mono text-micro uppercase text-faint">
+            {projects.length} board{projects.length === 1 ? '' : 's'}
+          </p>
 
-                <h3 className="text-lg font-bold text-white group-hover:text-blue-300 transition line-clamp-2">
-                  {project.name}
-                </h3>
+          <ul className="divide-y divide-lineSoft border-y border-line">
+            {projects.map((p) => {
+              const scenes = p.segments?.length ?? 0;
+              const assets =
+                p.segments?.reduce(
+                  (n, s) => n + s.requirements.reduce((m, r) => m + r.assets.length, 0),
+                  0
+                ) ?? 0;
 
-                <p className="text-xs text-gray-400 line-clamp-3 italic">
-                  &ldquo;{project.source_text}&rdquo;
-                </p>
-              </div>
+              return (
+                <li key={p.id}>
+                  <Link
+                    href={`/projects/${p.id}`}
+                    className="group grid min-w-0 gap-3 py-5 transition-colors hover:bg-panel sm:grid-cols-12 sm:items-center sm:gap-4 sm:px-3"
+                  >
+                    {/* min-w-0 throughout: grid/flex children default to
+                        min-width:auto, which lets a long title force the track
+                        wider than the viewport and defeats `truncate`. */}
+                    <div className="min-w-0 sm:col-span-6">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <StatusDot status={p.status} />
+                        <h2 className="truncate text-sm font-medium text-bone group-hover:text-ochre">
+                          {p.name}
+                        </h2>
+                      </div>
+                      <p className="mt-1.5 line-clamp-1 pl-[18px] text-xs text-faint">
+                        {p.source_text.split('\n')[0]}
+                      </p>
+                    </div>
 
-              <div className="pt-4 border-t border-surfaceBorder/80 flex items-center justify-between text-xs text-gray-500">
-                <span className="flex items-center space-x-1 font-mono">
-                  <Clock className="w-3 h-3 text-gray-600" />
-                  <span>{new Date(project.created_at).toLocaleDateString()}</span>
-                </span>
+                    <dl className="flex min-w-0 gap-6 pl-[18px] font-mono text-micro uppercase sm:col-span-4 sm:pl-0">
+                      <div>
+                        <dt className="text-faint">Scenes</dt>
+                        <dd className="mt-0.5 text-sm text-bone">{scenes || '—'}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-faint">Assets</dt>
+                        <dd className="mt-0.5 text-sm text-bone">{assets || '—'}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-faint">Type</dt>
+                        <dd className="mt-0.5 text-sm text-bone">{p.source_type}</dd>
+                      </div>
+                    </dl>
 
-                <span className="text-blue-400 font-semibold group-hover:translate-x-1 transition-transform flex items-center space-x-1">
-                  <span>View Package</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </span>
-              </div>
-            </Link>
-          ))}
-        </div>
+                    <div className="min-w-0 pl-[18px] font-mono text-micro uppercase text-faint sm:col-span-2 sm:pl-0 sm:text-right">
+                      {formatDate(p.created_at)}
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
     </div>
   );

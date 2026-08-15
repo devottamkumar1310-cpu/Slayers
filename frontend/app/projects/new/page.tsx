@@ -1,172 +1,277 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
-import { Film, Sparkles, ArrowRight, FileText, Zap, AlertCircle } from 'lucide-react';
+import { api, ApiError } from '@/lib/api';
+import ErrorNotice from '@/components/ErrorNotice';
+import type { SourceType } from '@/types';
 
-const PRESET_SCRIPTS = [
+/** Mirrors ProjectCreate in backend/app/schemas/schemas.py. */
+const MAX_CHARS = 20_000;
+const MAX_NAME = 255;
+/** Below this the analyser has too little to segment into scenes. */
+const MIN_USEFUL_CHARS = 80;
+
+const SOURCE_TYPES: { id: SourceType; label: string; blurb: string }[] = [
+  { id: 'script', label: 'Script', blurb: 'Narration written to be read aloud' },
+  { id: 'transcript', label: 'Transcript', blurb: 'Text captured from existing audio' },
+  { id: 'text', label: 'Article', blurb: 'Prose you want to turn into video' },
+];
+
+const EXAMPLES: { title: string; type: SourceType; text: string }[] = [
   {
-    title: 'How AI Coding Agents are Changing Software Development',
+    title: 'How AI coding agents are changing software development',
     type: 'script',
     text: `The software industry is undergoing a massive shift as AI coding agents emerge.
 Developers no longer spend hours writing boilerplate code manually.
 Instead, intelligent agents analyze repositories, create implementation plans, and write multi-file features.
 For example, modern IDE interfaces now feature AI pair-programmers integrated right into the editor window.
-This transformation allows small engineering teams to build complex software in a fraction of the time.`
+This transformation allows small engineering teams to build complex software in a fraction of the time.
+Companies like GitHub, Google, and OpenAI are shipping AI tools that automate repetitive coding tasks.
+The market data shows developer productivity increasing by 30 to 55 percent with AI-assisted workflows.`,
   },
   {
-    title: 'Introducing the Next Generation Cloud Architecture',
+    title: 'The next generation of cloud architecture',
     type: 'script',
-    text: `Today we are announcing a revolutionary serverless cloud platform built for real-time applications.
+    text: `Today we are announcing a serverless cloud platform built for real-time applications.
 Our new analytics dashboard processes millions of events per second with sub-millisecond latency.
-Engineering teams can monitor global data pipelines and microservices in real time.
-Here is a live look at the user dashboard interface showing global network metrics.`
-  }
+Engineering teams can monitor global data pipelines and microservices as they run.
+Here is a live look at the user dashboard interface showing global network metrics.
+Behind it sits a distributed database that replicates across every major region.`,
+  },
 ];
 
 export default function NewProjectPage() {
   const router = useRouter();
   const [name, setName] = useState('');
-  const [sourceType, setSourceType] = useState('script');
+  const [sourceType, setSourceType] = useState<SourceType>('script');
   const [sourceText, setSourceText] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [touched, setTouched] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim() || !sourceText.trim()) {
-      setError('Please provide both a project name and script content.');
-      return;
-    }
+  const chars = sourceText.length;
+  const words = useMemo(
+    () => sourceText.trim().split(/\s+/).filter(Boolean).length,
+    [sourceText]
+  );
+  const lines = useMemo(
+    () => sourceText.split('\n').map((l) => l.trim()).filter(Boolean).length,
+    [sourceText]
+  );
 
-    setLoading(true);
+  const overLimit = chars > MAX_CHARS;
+  const tooShort = sourceText.trim().length > 0 && sourceText.trim().length < MIN_USEFUL_CHARS;
+  const emptyScript = sourceText.trim().length === 0;
+  const emptyName = name.trim().length === 0;
+
+  const scriptProblem = overLimit
+    ? `That is ${(chars - MAX_CHARS).toLocaleString()} characters over the ${MAX_CHARS.toLocaleString()} limit. Trim it or split it into two projects.`
+    : emptyScript
+      ? 'Paste the narration you want visuals for.'
+      : tooShort
+        ? `A little more text gives the analyser something to work with — around ${MIN_USEFUL_CHARS} characters is the practical minimum.`
+        : null;
+
+  const blocked = emptyName || emptyScript || overLimit;
+
+  const submit = async () => {
+    setTouched(true);
+    if (blocked) return;
+
+    setSubmitting(true);
     setError(null);
-
     try {
-      const project = await api.createProject(name, sourceText, sourceType);
-      // Trigger processing pipeline
+      const project = await api.createProject(name.trim(), sourceText, sourceType);
       await api.startProcessing(project.id);
-      router.push(`/projects/${project.id}`);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Failed to create project.');
-      setLoading(false);
+      router.push(`/projects/${project.id}?autostart=1`);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : 'Could not start the run. Try again.'
+      );
+      setSubmitting(false);
     }
   };
 
-  const loadPreset = (preset: typeof PRESET_SCRIPTS[0]) => {
-    setName(preset.title);
-    setSourceType(preset.type);
-    setSourceText(preset.text);
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    void submit();
+  };
+
+  const loadExample = (ex: (typeof EXAMPLES)[number]) => {
+    setName(ex.title);
+    setSourceType(ex.type);
+    setSourceText(ex.text);
     setError(null);
+    setTouched(false);
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 py-4">
-      <div className="space-y-2">
-        <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold">
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>NEW VISUAL ASSET PACKAGE</span>
-        </div>
-        <h1 className="text-3xl font-extrabold text-white">Create a Visual Research Project</h1>
-        <p className="text-sm text-gray-400">
-          Paste your script or transcript below. SLAYERS will automatically extract scenes, detect visual intents, and discover matching assets.
+    <div className="py-10">
+      <div className="border-b border-line pb-6">
+        <p className="eyebrow">New board</p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight text-bone">
+          Give SLAYERS a script
+        </h1>
+        <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">
+          Every line becomes a scene. Every scene gets a visual intent, a search query,
+          and a ranked set of real candidates. You will land on the board when the run
+          finishes.
         </p>
       </div>
 
-      {/* Preset Pickers */}
-      <div className="space-y-3">
-        <span className="text-xs font-bold uppercase tracking-wider text-gray-400 block">Quick Demo Presets:</span>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {PRESET_SCRIPTS.map((preset, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => loadPreset(preset)}
-              className="text-left p-3.5 bg-surface hover:bg-surfaceBorder border border-surfaceBorder rounded-xl transition space-y-1 group"
+      <div className="grid gap-10 pt-8 lg:grid-cols-12 lg:gap-12">
+        <form onSubmit={handleSubmit} noValidate className="space-y-8 lg:col-span-8">
+          {/* Name */}
+          <div>
+            <label htmlFor="project-name" className="eyebrow block">
+              Project name
+            </label>
+            <input
+              id="project-name"
+              type="text"
+              value={name}
+              maxLength={MAX_NAME}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="AI coding agents — explainer"
+              aria-invalid={touched && emptyName}
+              aria-describedby={touched && emptyName ? 'name-error' : undefined}
+              className={`field mt-2.5 ${touched && emptyName ? 'border-rust' : ''}`}
+            />
+            {touched && emptyName && (
+              <p id="name-error" className="mt-2 text-xs text-rust">
+                Give the board a name so you can find it again.
+              </p>
+            )}
+          </div>
+
+          {/* Source type */}
+          <fieldset>
+            <legend className="eyebrow">Source type</legend>
+            <div className="mt-2.5 grid gap-px border border-line bg-line sm:grid-cols-3">
+              {SOURCE_TYPES.map((t) => {
+                const active = sourceType === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setSourceType(t.id)}
+                    className={`p-3.5 text-left transition-colors ${
+                      active ? 'bg-ochre-wash' : 'bg-panel hover:bg-raised'
+                    }`}
+                  >
+                    <span
+                      className={`font-mono text-label uppercase ${
+                        active ? 'text-ochre' : 'text-bone'
+                      }`}
+                    >
+                      {t.label}
+                    </span>
+                    <span className="mt-1 block text-xs leading-snug text-muted">{t.blurb}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
+
+          {/* Script */}
+          <div>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <label htmlFor="source-text" className="eyebrow">
+                Narration
+              </label>
+              <p className="font-mono text-micro uppercase text-faint">
+                <span className={overLimit ? 'text-rust' : 'text-muted'}>
+                  {chars.toLocaleString()}
+                </span>
+                {' / '}
+                {MAX_CHARS.toLocaleString()} chars · {words.toLocaleString()} words ·{' '}
+                {lines.toLocaleString()} lines
+              </p>
+            </div>
+
+            <textarea
+              id="source-text"
+              value={sourceText}
+              onChange={(e) => setSourceText(e.target.value)}
+              onBlur={() => setTouched(true)}
+              rows={16}
+              placeholder={
+                'One idea per line works best.\n\nThe software industry is undergoing a massive shift as AI coding agents emerge.\nDevelopers no longer spend hours writing boilerplate code manually.'
+              }
+              aria-invalid={touched && (emptyScript || overLimit)}
+              aria-describedby="script-help"
+              className={`field mt-2.5 resize-y font-mono text-[13px] leading-relaxed ${
+                overLimit || (touched && emptyScript) ? 'border-rust' : ''
+              }`}
+            />
+
+            <p
+              id="script-help"
+              className={`mt-2 text-xs leading-relaxed ${
+                overLimit || (touched && emptyScript) ? 'text-rust' : 'text-muted'
+              }`}
             >
-              <span className="text-xs font-semibold text-blue-400 group-hover:text-blue-300 flex items-center space-x-1.5">
-                <Zap className="w-3.5 h-3.5 text-amber-400" />
-                <span>Preset {idx + 1}</span>
-              </span>
-              <p className="text-sm font-medium text-white line-clamp-1">{preset.title}</p>
+              {scriptProblem ?? 'Each line is treated as a beat and gets its own timecode.'}
+            </p>
+          </div>
+
+          {error && (
+            <ErrorNotice
+              message={error}
+              onRetry={() => {
+                setError(null);
+                void submit();
+              }}
+            />
+          )}
+
+          <div className="flex flex-wrap items-center gap-4 border-t border-line pt-6">
+            <button type="submit" disabled={submitting || blocked} className="btn-primary">
+              {submitting ? 'Starting the run…' : 'Analyse & find visuals'}
             </button>
-          ))}
-        </div>
+            <p className="font-mono text-micro uppercase text-faint">
+              Runs scene analysis, provider search and ranking — usually under a minute
+            </p>
+          </div>
+        </form>
+
+        {/* Examples */}
+        <aside className="lg:col-span-4">
+          <div className="panel">
+            <p className="border-b border-line px-4 py-2.5 eyebrow">Start from an example</p>
+            <ul className="divide-y divide-lineSoft">
+              {EXAMPLES.map((ex) => (
+                <li key={ex.title}>
+                  <button
+                    type="button"
+                    onClick={() => loadExample(ex)}
+                    className="w-full p-4 text-left transition-colors hover:bg-raised"
+                  >
+                    <p className="text-sm font-medium leading-snug text-bone">{ex.title}</p>
+                    <p className="mt-2 line-clamp-2 font-mono text-[11px] leading-relaxed text-faint">
+                      {ex.text.split('\n')[0]}
+                    </p>
+                    <p className="mt-2.5 font-mono text-micro uppercase text-ochre">
+                      Load this script →
+                    </p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="mt-6 border-l-2 border-line pl-4">
+            <p className="eyebrow">Writing for better results</p>
+            <ul className="mt-3 space-y-2.5 text-xs leading-relaxed text-muted">
+              <li>Name concrete things — products, companies, places. Generic lines return generic stock.</li>
+              <li>Keep one idea per line so scene boundaries land where you expect.</li>
+              <li>Anything the engine cannot source confidently comes back flagged rather than hidden.</li>
+            </ul>
+          </div>
+        </aside>
       </div>
-
-      {/* Project Form */}
-      <form onSubmit={handleSubmit} className="bg-surface border border-surfaceBorder rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl">
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase tracking-wider text-gray-300 block">Project Title</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. AI Agents Explainer Video Script"
-            className="w-full bg-background border border-surfaceBorder rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition"
-            required
-          />
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase tracking-wider text-gray-300 block">Content Type</label>
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { id: 'script', label: 'Video Script' },
-              { id: 'transcript', label: 'Audio Transcript' },
-              { id: 'text', label: 'Raw Article / Text' },
-            ].map((type) => (
-              <button
-                key={type.id}
-                type="button"
-                onClick={() => setSourceType(type.id)}
-                className={`py-2.5 px-3 rounded-xl text-xs font-semibold border transition ${
-                  sourceType === type.id
-                    ? 'bg-blue-600 border-blue-500 text-white shadow-md'
-                    : 'bg-background border-surfaceBorder text-gray-400 hover:text-white'
-                }`}
-              >
-                {type.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase tracking-wider text-gray-300 block">Script / Transcript Content</label>
-          <textarea
-            value={sourceText}
-            onChange={(e) => setSourceText(e.target.value)}
-            rows={10}
-            placeholder="Paste your video narration script or video transcript here..."
-            className="w-full bg-background border border-surfaceBorder rounded-xl p-4 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition font-mono leading-relaxed"
-            required
-          />
-          <p className="text-[11px] text-gray-500 text-right font-mono">
-            {sourceText.trim().split(/\s+/).filter(Boolean).length} words
-          </p>
-        </div>
-
-        {error && (
-          <div className="p-4 bg-red-950/30 border border-red-500/30 rounded-xl text-red-300 text-sm flex items-center space-x-2">
-            <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        <div className="pt-2">
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full inline-flex items-center justify-center space-x-3 text-base font-bold text-white bg-blue-600 hover:bg-blue-500 px-6 py-4 rounded-xl shadow-xl shadow-blue-600/30 transition active:scale-95 disabled:opacity-50"
-          >
-            <span>{loading ? 'Creating Project & Triggering Engine...' : 'Build Visual Package'}</span>
-            <ArrowRight className="w-5 h-5" />
-          </button>
-        </div>
-      </form>
     </div>
   );
 }

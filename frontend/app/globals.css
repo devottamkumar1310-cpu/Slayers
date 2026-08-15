@@ -2,30 +2,102 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #090d16;
-  --foreground: #f3f4f6;
+@layer base {
+  :root {
+    --ink: #0c0c0d;
+    --panel: #131315;
+    --line: #26262a;
+    --bone: #edece8;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--ink);
+    color: var(--bone);
+    /* Faint grid — the "cutting mat" of the research desk. Purely structural,
+       no gradients or glows. */
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.016) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.016) 1px, transparent 1px);
+    background-size: 64px 64px;
+  }
+
+  /* Visible, consistent keyboard focus everywhere. */
+  :focus-visible {
+    outline: 2px solid #e0a33e;
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background: #e0a33e;
+    color: #0c0c0d;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0c0c0d;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #26262a;
+    border: 2px solid #0c0c0d;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a3a40;
+  }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  min-height: 100vh;
+@layer components {
+  /* Editorial eyebrow label: uppercase, wide-tracked, monospaced. */
+  .eyebrow {
+    @apply font-mono text-micro uppercase tracking-[0.14em] text-faint;
+  }
+
+  /* Hairline-ruled panel. No shadow, no gradient. */
+  .panel {
+    @apply border border-line bg-panel;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 border border-ochre bg-ochre
+           px-5 py-2.5 font-mono text-label uppercase text-ink
+           transition-colors hover:bg-ochre-dim hover:border-ochre-dim
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 border border-line bg-transparent
+           px-4 py-2.5 font-mono text-label uppercase text-muted
+           transition-colors hover:border-faint hover:text-bone
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .field {
+    @apply w-full border border-line bg-raised px-3 py-2.5 text-sm text-bone
+           placeholder:text-faint focus:border-ochre focus:outline-none;
+  }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: #0d1322;
-}
-::-webkit-scrollbar-thumb {
-  background: #1f293d;
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #374151;
+@layer utilities {
+  /* Horizontal asset rails scroll inside themselves; the page never does. */
+  .rail {
+    scrollbar-width: thin;
+    scrollbar-color: #26262a #0c0c0d;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }

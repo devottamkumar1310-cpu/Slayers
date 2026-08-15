@@ -1,286 +1,263 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
-import { Project, ProjectSummary } from '@/types';
-import { api } from '@/lib/api';
+import { Suspense, useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useParams, useSearchParams } from 'next/navigation';
+import type { Project, ProjectSummary } from '@/types';
+import { api, ApiError } from '@/lib/api';
+import { exportProject } from '@/lib/export';
+import { formatDate } from '@/lib/format';
+import BoardSummary from '@/components/BoardSummary';
+import ErrorNotice from '@/components/ErrorNotice';
 import ProcessingView from '@/components/ProcessingView';
 import SceneCard from '@/components/SceneCard';
-import ProjectSummaryView from '@/components/ProjectSummary';
-import { Loader2, ArrowLeft, RefreshCw, Play, Layers, AlertCircle } from 'lucide-react';
-import Link from 'next/link';
+import StatusDot from '@/components/StatusDot';
 
-export default function ProjectDetailPage() {
-  const params = useParams();
-  const projectId = params.id as string;
+export default function ProjectPage() {
+  return (
+    <Suspense fallback={<BoardSkeleton />}>
+      <ProjectBoard />
+    </Suspense>
+  );
+}
+
+function ProjectBoard() {
+  const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const projectId = params?.id as string;
+  const autostart = searchParams?.get('autostart') === '1';
 
   const [project, setProject] = useState<Project | null>(null);
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [showProcessing, setShowProcessing] = useState(autostart);
+  const [starting, setStarting] = useState(false);
 
-  const loadProjectData = useCallback(async () => {
+  const load = useCallback(async () => {
+    if (!projectId) return;
+    setError(null);
+    setNotFound(false);
     try {
-      setError(null);
       const proj = await api.getProject(projectId);
       setProject(proj);
 
-      if (proj.status === 'processing' || (proj.processing_job && proj.processing_job.status === 'processing')) {
-        setIsProcessing(true);
-      } else {
-        setIsProcessing(false);
-        if (proj.status === 'completed') {
-          const sum = await api.getProjectSummary(projectId);
-          setSummary(sum);
+      const running =
+        proj.status === 'processing' || proj.processing_job?.status === 'processing';
+      setShowProcessing(running);
+
+      if (proj.status === 'completed') {
+        try {
+          setSummary(await api.getProjectSummary(projectId));
+        } catch {
+          // A missing summary must not blank the board — the scenes still render.
+          setSummary(null);
         }
+      } else {
+        setSummary(null);
       }
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Failed to load project details.');
+    } catch (err) {
+      if (err instanceof ApiError && err.isNotFound) {
+        setNotFound(true);
+      } else {
+        setError(err instanceof ApiError ? err.message : 'Could not load this board.');
+      }
     } finally {
       setLoading(false);
     }
   }, [projectId]);
 
   useEffect(() => {
-    if (projectId) {
-      loadProjectData();
-    }
-  }, [projectId, loadProjectData]);
+    void load();
+  }, [load]);
 
-  const handleExport = (format: 'json' | 'csv') => {
-    if (!project) return;
-
-    if (format === 'json') {
-      const exportData = {
-        project_name: project.name,
-        source_type: project.source_type,
-        source_text: project.source_text,
-        exported_at: new Date().toISOString(),
-        summary: summary,
-        scenes: project.segments.map((seg) => ({
-          scene_sequence: seg.sequence,
-          start_time: seg.start_time,
-          end_time: seg.end_time,
-          visual_intent: seg.visual_intent,
-          narration: seg.text,
-          requirements: seg.requirements.map((req) => ({
-            description: req.description,
-            search_query: req.search_query,
-            priority: req.priority,
-            reason: req.reason,
-            assets: req.assets.map((a) => ({
-              title: a.title,
-              relevance_score: a.relevance_score,
-              status: a.status,
-              source: a.source,
-              source_url: a.source_url,
-              asset_url: a.asset_url,
-              thumbnail_url: a.thumbnail_url,
-              license_info: a.license_info,
-              usage_notes: a.usage_notes,
-            })),
-          })),
-        })),
-      };
-
-      const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(exportData, null, 2))}`;
-      const downloadAnchor = document.createElement('a');
-      downloadAnchor.setAttribute('href', jsonString);
-      downloadAnchor.setAttribute('download', `slayers_package_${project.id.slice(0, 8)}.json`);
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
-    } else {
-      // Export ALL assets across all scenes and requirements to CSV
-      const rows = [
-        ['Scene', 'Start_Time', 'End_Time', 'Visual_Intent', 'Narration', 'Requirement', 'Priority', 'Asset_Title', 'Asset_Status', 'Match_Score', 'Source', 'License', 'Source_URL', 'Asset_URL']
-      ];
-
-      project.segments.forEach((seg) => {
-        seg.requirements.forEach((req) => {
-          if (req.assets.length === 0) {
-            rows.push([
-              `Scene ${seg.sequence}`,
-              seg.start_time || '',
-              seg.end_time || '',
-              seg.visual_intent || '',
-              seg.text,
-              req.description,
-              req.priority,
-              'No assets discovered',
-              '',
-              '',
-              '',
-              '',
-              '',
-              '',
-            ]);
-          } else {
-            req.assets.forEach((asset) => {
-              rows.push([
-                `Scene ${seg.sequence}`,
-                seg.start_time || '',
-                seg.end_time || '',
-                seg.visual_intent || '',
-                seg.text,
-                req.description,
-                req.priority,
-                asset.title,
-                asset.status,
-                String(asset.relevance_score),
-                asset.source,
-                asset.license_info,
-                asset.source_url,
-                asset.asset_url,
-              ]);
-            });
-          }
-        });
-      });
-
-      const csvContent = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.setAttribute('href', url);
-      link.setAttribute('download', `slayers_package_manifest_${project.id.slice(0, 8)}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    }
-  };
-
-  const handleStartProcessing = async () => {
-    if (!projectId) return;
+  const handleProcessingDone = useCallback(() => {
+    setShowProcessing(false);
     setLoading(true);
+    void load();
+  }, [load]);
+
+  const startRun = async () => {
+    setStarting(true);
+    setActionError(null);
     try {
       await api.startProcessing(projectId);
-      setIsProcessing(true);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Failed to start processing.');
+      setShowProcessing(true);
+    } catch (err) {
+      if (err instanceof ApiError && err.isConflict) {
+        // Already running elsewhere — follow it rather than showing an error.
+        setShowProcessing(true);
+      } else {
+        setActionError(err instanceof ApiError ? err.message : 'Could not start the run.');
+      }
     } finally {
-      setLoading(false);
+      setStarting(false);
     }
   };
 
-  if (loading) {
+  const handleExport = (format: 'csv' | 'json') => {
+    if (project) exportProject(project, summary, format);
+  };
+
+  if (loading) return <BoardSkeleton />;
+
+  if (notFound) {
     return (
-      <div className="py-24 text-center space-y-3">
-        <Loader2 className="w-8 h-8 text-blue-400 animate-spin mx-auto" />
-        <p className="text-sm text-gray-400">Loading project detail...</p>
+      <div className="mx-auto max-w-lg py-24 text-center">
+        <p className="eyebrow">404</p>
+        <h1 className="mt-4 text-2xl font-semibold tracking-tight text-bone">
+          No board with that id
+        </h1>
+        <p className="mt-3 text-sm leading-relaxed text-muted">
+          It may have been deleted, or the link may be incomplete.
+        </p>
+        <Link href="/projects" className="btn-ghost mt-6">
+          Back to boards
+        </Link>
       </div>
     );
   }
 
   if (error || !project) {
     return (
-      <div className="py-16 text-center space-y-4">
-        <AlertCircle className="w-10 h-10 text-red-400 mx-auto" />
-        <h2 className="text-xl font-bold text-white">{error || 'Project Not Found'}</h2>
-        <Link href="/projects" className="inline-block text-sm text-blue-400 hover:underline">
-          &larr; Return to Projects List
+      <div className="mx-auto max-w-lg py-24">
+        <ErrorNotice message={error ?? 'Could not load this board.'} onRetry={load} />
+        <Link
+          href="/projects"
+          className="mt-6 inline-block font-mono text-label uppercase text-muted hover:text-bone"
+        >
+          ← Back to boards
         </Link>
       </div>
     );
   }
 
+  const scenes = project.segments ?? [];
+  const isDraft = project.status === 'draft' && !showProcessing;
+  const isFailed = project.status === 'failed' && !showProcessing;
+
   return (
-    <div className="space-y-8 py-4">
-      {/* Navigation Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center space-x-3">
+    <div className="py-8">
+      {/* ── Board header ─────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-6">
+        <div className="min-w-0">
           <Link
             href="/projects"
-            className="p-2 rounded-lg bg-surface border border-surfaceBorder hover:bg-surfaceBorder text-gray-400 hover:text-white transition"
+            className="font-mono text-micro uppercase text-faint hover:text-bone"
           >
-            <ArrowLeft className="w-4 h-4" />
+            ← Boards
           </Link>
-          <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">
-              VISUAL ASSET PACKAGE
-            </span>
-            <h1 className="text-2xl font-extrabold text-white">{project.name}</h1>
+          <div className="mt-3 flex items-center gap-2.5">
+            <StatusDot status={project.status} />
+            <h1 className="truncate text-2xl font-semibold tracking-tight text-bone">
+              {project.name}
+            </h1>
           </div>
+          <p className="mt-2 font-mono text-micro uppercase text-faint">
+            {project.source_type} · created {formatDate(project.created_at)} ·{' '}
+            {project.source_text.length.toLocaleString()} chars
+          </p>
         </div>
 
-        <div className="flex items-center space-x-3">
-          {project.status === 'draft' ? (
-            <button
-              onClick={handleStartProcessing}
-              className="flex items-center space-x-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 px-4 py-2.5 rounded-xl shadow-lg shadow-blue-600/30 transition active:scale-95"
-            >
-              <Play className="w-3.5 h-3.5" />
-              <span>Start Discovery Pipeline</span>
-            </button>
-          ) : (
-            <button
-              onClick={handleStartProcessing}
-              className="flex items-center space-x-2 text-xs font-semibold text-gray-300 bg-surface border border-surfaceBorder hover:bg-surfaceBorder px-3.5 py-2 rounded-xl transition"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Re-run Pipeline</span>
-            </button>
-          )}
-        </div>
+        {!showProcessing && (
+          <button type="button" onClick={startRun} disabled={starting} className="btn-ghost">
+            {starting ? 'Starting…' : isDraft ? 'Analyse & find visuals' : 'Re-run pipeline'}
+          </button>
+        )}
       </div>
 
-      {/* Main Content Area */}
-      {isProcessing ? (
-        <ProcessingView
-          projectId={projectId}
-          onCompleted={() => {
-            setIsProcessing(false);
-            loadProjectData();
-          }}
-        />
-      ) : project.status === 'draft' ? (
-        <div className="bg-surface border border-surfaceBorder rounded-2xl p-12 text-center space-y-4 max-w-2xl mx-auto my-8">
-          <Layers className="w-12 h-12 text-blue-400 mx-auto" />
-          <h3 className="text-xl font-bold text-white">Project Ready for Analysis</h3>
-          <p className="text-sm text-gray-400">
-            Your script has been saved. Click below to analyze scenes, extract visual intents, and discover matching assets across providers.
-          </p>
-          <button
-            onClick={handleStartProcessing}
-            className="inline-flex items-center space-x-2 text-sm font-bold text-white bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded-xl shadow-xl shadow-blue-600/25 transition active:scale-95"
-          >
-            <Play className="w-4 h-4" />
-            <span>Build Visual Package Now</span>
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-10">
-          {/* Summary Header */}
-          {summary && <ProjectSummaryView summary={summary} onExport={handleExport} />}
-
-          {/* Interactive Scene Cards / Asset Board */}
-          <div className="space-y-6">
-            <div className="flex items-center justify-between border-b border-surfaceBorder pb-4">
-              <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-                <Layers className="w-5 h-5 text-blue-400" />
-                <span>Visual Asset Board ({project.segments.length} Scenes)</span>
-              </h2>
-            </div>
-
-            {project.segments.length === 0 ? (
-              <div className="bg-surface border border-surfaceBorder rounded-2xl p-12 text-center space-y-3">
-                <AlertCircle className="w-10 h-10 text-gray-500 mx-auto" />
-                <h3 className="text-lg font-bold text-white">No Scenes Generated</h3>
-                <p className="text-xs text-gray-400">Try re-running the pipeline or checking the script format.</p>
-              </div>
-            ) : (
-              <div className="space-y-8">
-                {project.segments.map((segment) => (
-                  <SceneCard key={segment.id} segment={segment} />
-                ))}
-              </div>
-            )}
-          </div>
+      {actionError && (
+        <div className="max-w-xl pt-6">
+          <ErrorNotice message={actionError} />
         </div>
       )}
+
+      {/* ── Body ─────────────────────────────────────────────────────────── */}
+      {showProcessing ? (
+        <ProcessingView projectId={projectId} onCompleted={handleProcessingDone} />
+      ) : isDraft ? (
+        <div className="mx-auto max-w-xl py-24 text-center">
+          <p className="eyebrow">Not started</p>
+          <h2 className="mt-4 text-xl font-semibold tracking-tight text-bone">
+            The script is saved. Nothing has been searched yet.
+          </h2>
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            Running the pipeline splits it into scenes, decides what each one needs to show,
+            and searches every configured source for it.
+          </p>
+          <button type="button" onClick={startRun} disabled={starting} className="btn-primary mt-6">
+            {starting ? 'Starting…' : 'Analyse & find visuals'}
+          </button>
+        </div>
+      ) : isFailed ? (
+        <div className="mx-auto max-w-xl py-20">
+          <ErrorNotice
+            message={
+              project.processing_job?.error ||
+              'The last run failed before it produced a board.'
+            }
+            hint="The script is unchanged — re-running starts the pipeline from the beginning."
+            onRetry={startRun}
+            retryLabel={starting ? 'Restarting…' : 'Re-run pipeline'}
+          />
+        </div>
+      ) : (
+        <div className="pt-8">
+          {summary && (
+            <BoardSummary
+              summary={summary}
+              job={project.processing_job}
+              onExport={handleExport}
+            />
+          )}
+
+          <div className="flex flex-wrap items-baseline justify-between gap-3 pt-10">
+            <h2 className="text-lg font-semibold tracking-tight text-bone">Visual board</h2>
+            <p className="font-mono text-micro uppercase text-faint">
+              Script on the left · what it needs and what was found on the right
+            </p>
+          </div>
+
+          {scenes.length === 0 ? (
+            <div className="mt-6 border border-dashed border-line px-6 py-20 text-center">
+              <p className="eyebrow">Empty board</p>
+              <p className="mx-auto mt-4 max-w-md text-sm leading-relaxed text-muted">
+                The run finished without producing any scenes. That usually means the script
+                was too short or contained no usable sentences.
+              </p>
+              <button type="button" onClick={startRun} className="btn-ghost mt-6">
+                Re-run pipeline
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2">
+              {scenes.map((segment) => (
+                <SceneCard key={segment.id} segment={segment} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BoardSkeleton() {
+  return (
+    <div className="py-10" aria-busy="true">
+      <div className="h-3 w-24 animate-pulse bg-line" />
+      <div className="mt-4 h-6 w-2/3 max-w-md animate-pulse bg-line" />
+      <div className="mt-10 grid grid-cols-2 gap-px border border-line bg-line sm:grid-cols-6">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="bg-panel p-4">
+            <div className="h-2 w-16 animate-pulse bg-line" />
+            <div className="mt-3 h-6 w-10 animate-pulse bg-line" />
+          </div>
+        ))}
+      </div>
+      <p className="sr-only">Loading board…</p>
     </div>
   );
 }

@@ -1,138 +1,190 @@
 'use client';
 
-import { Asset } from '@/types';
-import { ExternalLink, Download, ShieldAlert, ShieldCheck, CheckCircle2, Film, Image as ImageIcon } from 'lucide-react';
+import { useState } from 'react';
+import type { Asset } from '@/types';
+import {
+  describeStatus,
+  describeUsage,
+  humanizeIntent,
+  parseScoreFactors,
+  scoreRationale,
+  scoreTone,
+} from '@/lib/format';
+import { fileKind, isDocumentAsset, previewUrl } from '@/lib/preview';
 
-interface AssetCardProps {
-  asset: Asset;
-  isRecommended?: boolean;
-}
+export default function AssetCard({ asset }: { asset: Asset }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const [showBreakdown, setShowBreakdown] = useState(false);
 
-export default function AssetCard({ asset, isRecommended = false }: AssetCardProps) {
-  const getScoreColor = (score: number) => {
-    if (score >= 80) return 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400';
-    if (score >= 60) return 'bg-blue-500/10 border-blue-500/30 text-blue-400';
-    return 'bg-amber-500/10 border-amber-500/30 text-amber-400';
-  };
-
-  const isManualReview = asset.license_info.toLowerCase().includes('verify') || asset.status === 'flagged';
+  const status = describeStatus(asset.status);
+  const usage = describeUsage(asset.usage_status);
+  const factors = parseScoreFactors(asset.usage_notes);
+  const rationale = scoreRationale(asset.usage_notes);
+  const src = previewUrl(asset);
+  const kind = fileKind(asset);
+  const isDocument = isDocumentAsset(asset);
+  const isRecommended = asset.status === 'recommended';
 
   return (
-    <div
-      className={`rounded-xl border transition-all overflow-hidden flex flex-col justify-between ${
-        isRecommended
-          ? 'bg-surface border-blue-500/40 shadow-xl shadow-blue-500/5 ring-1 ring-blue-500/20'
-          : 'bg-surface/60 border-surfaceBorder hover:border-gray-600'
+    <article
+      className={`flex h-full flex-col border bg-panel ${
+        isRecommended ? 'border-sage/45' : 'border-line'
       }`}
     >
-      <div>
-        {/* Thumbnail Preview Header */}
-        <div className="relative aspect-video w-full bg-background overflow-hidden group">
-          {asset.thumbnail_url || asset.asset_url ? (
-            <img
-              src={asset.thumbnail_url || asset.asset_url}
-              alt={asset.title}
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-              onError={(e) => {
-                // Fallback for image load failure
-                (e.target as HTMLElement).style.display = 'none';
-              }}
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center bg-surfaceBorder/30 text-gray-500">
-              {asset.asset_type === 'video' ? <Film className="w-8 h-8" /> : <ImageIcon className="w-8 h-8" />}
-            </div>
-          )}
+      {/* ── The asset itself: the brightest, largest thing on the card ─────── */}
+      <div className="relative aspect-[4/3] w-full overflow-hidden bg-raised">
+        {src && !imageFailed ? (
+          /* eslint-disable-next-line @next/next/no-img-element -- remote hosts
+             are open-ended (any provider CDN); next/image is configured
+             unoptimized anyway, so a plain img avoids the allow-list trap. */
+          <img
+            src={src}
+            alt={asset.title}
+            loading="lazy"
+            decoding="async"
+            onError={() => setImageFailed(true)}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-faint">
+            <span aria-hidden="true" className="h-8 w-8 border border-faint" />
+            <span className="font-mono text-micro uppercase">
+              {imageFailed ? 'Preview unavailable' : 'No preview'}
+            </span>
+          </div>
+        )}
 
-          {/* Recommended Tag */}
-          {isRecommended && (
-            <div className="absolute top-2 left-2 bg-blue-600 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md shadow-md">
-              RECOMMENDED
-            </div>
-          )}
-
-          {/* Score Badge */}
+        {/* File type matters to an editor: a "match" that is a PDF scan is not
+            drop-in footage, and the card should say so before they click. */}
+        {kind && (
           <div
-            className={`absolute top-2 right-2 border text-xs font-bold px-2 py-0.5 rounded-md backdrop-blur-md shadow-md ${getScoreColor(
-              asset.relevance_score
-            )}`}
+            className={`absolute bottom-0 right-0 px-2 py-1 font-mono text-micro uppercase ${
+              isDocument ? 'bg-rust/90 text-ink' : 'bg-ink/90 text-faint'
+            }`}
           >
-            {asset.relevance_score} MATCH
+            {kind}
           </div>
+        )}
+
+        {/* Score chip — solid so it stays legible on any image. */}
+        <div className="absolute right-0 top-0 flex items-baseline gap-1 bg-ink/90 px-2.5 py-1.5">
+          <span className={`font-mono text-base leading-none ${scoreTone(asset.relevance_score)}`}>
+            {asset.relevance_score}
+          </span>
+          <span className="font-mono text-micro uppercase text-faint">match</span>
         </div>
 
-        {/* Content Details */}
-        <div className="p-4 space-y-3">
-          <div className="flex items-start justify-between gap-2">
-            <h4 className="text-sm font-semibold text-white line-clamp-2" title={asset.title}>
-              {asset.title}
-            </h4>
-          </div>
+        {/* Status ribbon */}
+        <div className="absolute bottom-0 left-0 bg-ink/90 px-2.5 py-1">
+          <span className={`font-mono text-micro uppercase ${status.text}`} title={status.hint}>
+            {status.label}
+          </span>
+        </div>
+      </div>
 
-          {/* Rationale / Why */}
-          {asset.usage_notes && (
-            <div className="text-xs text-gray-300 bg-background/60 p-2.5 rounded-lg border border-surfaceBorder/60 space-y-1">
-              <span className="text-[10px] uppercase font-bold text-gray-400 block tracking-wider">WHY THIS ASSET:</span>
-              <p className="leading-relaxed">{asset.usage_notes}</p>
-            </div>
+      {/* ── Metadata ───────────────────────────────────────────────────────── */}
+      <div className="flex flex-1 flex-col p-3.5">
+        <h4 className="line-clamp-2 text-[13px] font-medium leading-snug text-bone" title={asset.title}>
+          {asset.title}
+        </h4>
+
+        <dl className="mt-3 space-y-1.5 font-mono text-micro uppercase">
+          <div className="flex justify-between gap-3">
+            <dt className="text-faint">Source</dt>
+            <dd className="truncate text-muted" title={asset.source}>
+              {asset.source}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-faint">Type</dt>
+            <dd className="text-muted">{humanizeIntent(asset.asset_type, 'Image')}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-faint">Usage</dt>
+            <dd className={usage.tone === 'ok' ? 'text-muted' : 'text-rust'}>{usage.label}</dd>
+          </div>
+        </dl>
+
+        {/* Licence, verbatim from the source. */}
+        <p className="mt-3 border-t border-lineSoft pt-3 text-[11px] leading-relaxed text-muted">
+          <span className="font-mono text-micro uppercase text-faint">Licence · </span>
+          {asset.license_info}
+          {asset.license_url && (
+            <>
+              {' '}
+              <a
+                href={asset.license_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-ochre underline underline-offset-2 hover:text-bone"
+              >
+                terms
+              </a>
+            </>
           )}
+        </p>
+        <p className={`mt-1.5 text-[11px] leading-relaxed ${usage.tone === 'ok' ? 'text-faint' : 'text-rust'}`}>
+          {usage.note}
+        </p>
 
-          {/* Source & License Metadata */}
-          <div className="space-y-1.5 pt-1 text-xs">
-            <div className="flex items-center justify-between text-gray-400">
-              <span>Source:</span>
-              <span className="font-medium text-gray-200">{asset.source}</span>
-            </div>
+        {/* Why this score — parsed from the backend's own breakdown. */}
+        {(factors.length > 0 || rationale) && (
+          <div className="mt-3 border-t border-lineSoft pt-3">
+            <button
+              type="button"
+              onClick={() => setShowBreakdown((v) => !v)}
+              aria-expanded={showBreakdown}
+              className="font-mono text-micro uppercase text-ochre hover:text-bone"
+            >
+              {showBreakdown ? '− Hide score detail' : '+ Why this score'}
+            </button>
 
-            <div className="flex items-center justify-between text-gray-400">
-              <span>License:</span>
-              <span className="font-medium text-gray-300 truncate max-w-[180px]" title={asset.license_info}>
-                {asset.license_info}
-              </span>
-            </div>
-
-            {/* License Usage Status Tag */}
-            <div className="flex items-center justify-between pt-1">
-              <span className="text-gray-400">Usage Status:</span>
-              {isManualReview ? (
-                <span className="inline-flex items-center space-x-1 text-[11px] font-semibold text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/30">
-                  <ShieldAlert className="w-3 h-3" />
-                  <span>VERIFY MANUALLY</span>
-                </span>
-              ) : (
-                <span className="inline-flex items-center space-x-1 text-[11px] font-semibold text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded border border-emerald-400/30">
-                  <ShieldCheck className="w-3 h-3" />
-                  <span>COMMERCIAL OK</span>
-                </span>
-              )}
-            </div>
+            {showBreakdown && (
+              <div className="mt-3 space-y-2">
+                {factors.map((f) => (
+                  <div key={f.label}>
+                    <div className="flex justify-between font-mono text-micro uppercase">
+                      <span className="text-faint">{f.label}</span>
+                      <span className="text-muted">
+                        {f.value}/{f.max}
+                      </span>
+                    </div>
+                    <div className="mt-1 h-0.5 w-full bg-line">
+                      <div
+                        className="h-full bg-ochre"
+                        style={{ width: `${(f.value / f.max) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                {rationale && (
+                  <p className="pt-1 text-[11px] leading-relaxed text-muted">{rationale}</p>
+                )}
+              </div>
+            )}
           </div>
+        )}
+
+        {/* Actions pinned to the bottom so cards align in a row. */}
+        <div className="mt-auto flex gap-px border-t border-line pt-3.5">
+          <a
+            href={asset.source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 border border-line px-2 py-2 text-center font-mono text-micro uppercase text-muted transition-colors hover:border-faint hover:text-bone"
+          >
+            Source page
+          </a>
+          <a
+            href={asset.asset_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 border border-l-0 border-line px-2 py-2 text-center font-mono text-micro uppercase text-muted transition-colors hover:border-faint hover:text-bone"
+          >
+            Open file
+          </a>
         </div>
       </div>
-
-      {/* Action Buttons */}
-      <div className="p-4 pt-0 flex items-center space-x-2">
-        <a
-          href={asset.source_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex-1 inline-flex items-center justify-center space-x-1.5 text-xs font-semibold text-gray-300 bg-surfaceBorder/60 hover:bg-surfaceBorder hover:text-white px-3 py-2 rounded-lg transition"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-          <span>Open Source</span>
-        </a>
-
-        <a
-          href={asset.asset_url}
-          target="_blank"
-          download
-          rel="noopener noreferrer"
-          className="flex-1 inline-flex items-center justify-center space-x-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded-lg transition shadow-md"
-        >
-          <Download className="w-3.5 h-3.5" />
-          <span>Asset Direct</span>
-        </a>
-      </div>
-    </div>
+    </article>
   );
 }

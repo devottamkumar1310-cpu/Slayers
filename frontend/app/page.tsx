@@ -3,198 +3,256 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { api } from '@/lib/api';
-import { Film, Sparkles, ArrowRight, Layers, Search, ShieldCheck, CheckCircle2, Play, Zap } from 'lucide-react';
+import { api, ApiError } from '@/lib/api';
+import ErrorNotice from '@/components/ErrorNotice';
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Worked example used in the hero. These strings describe the SHAPE of the
+   board (fields the engine really produces); they are labelled as an example
+   and deliberately contain no fabricated asset imagery or scores presented as
+   a real run.
+   ────────────────────────────────────────────────────────────────────────── */
+
+const EXAMPLE_LINES = [
+  'The software industry is undergoing a massive shift as AI coding agents emerge.',
+  'Developers no longer spend hours writing boilerplate code manually.',
+  'Modern IDE interfaces now feature AI pair-programmers inside the editor window.',
+  'Small engineering teams can build complex software in a fraction of the time.',
+];
+
+const STAGES = [
+  { n: '01', name: 'Script', body: 'Paste narration, a transcript, or an article.' },
+  { n: '02', name: 'Understand', body: 'Split into scenes with timecodes and read what each beat is about.' },
+  { n: '03', name: 'Find', body: 'Query Wikimedia, Pexels, Unsplash and brand sources concurrently.' },
+  { n: '04', name: 'Rank', body: 'Score every candidate 0–100 on four explainable factors.' },
+  { n: '05', name: 'Build', body: 'Assemble a scene-by-scene board and export it as CSV or JSON.' },
+];
+
+const CAPABILITIES = [
+  {
+    k: 'Scene segmentation',
+    v: 'Narration is broken into ordered scenes, each with a start and end timecode.',
+  },
+  {
+    k: 'Visual intent',
+    v: 'Each scene is classified into one of 16 intents — product UI, logo, diagram, location, data visualisation and so on — which decides how it is searched for.',
+  },
+  {
+    k: 'Concurrent sourcing',
+    v: 'Providers are queried in parallel and isolated: one failing source degrades the result set, it does not fail the run.',
+  },
+  {
+    k: 'Explainable scoring',
+    v: 'Query match, visual type, source quality and scene context each contribute a fixed share of the 0–100 score. The breakdown is shown on every card.',
+  },
+  {
+    k: 'Licence capture',
+    v: 'Whatever the source publishes about licensing is recorded and displayed verbatim, with a link back to the source page.',
+  },
+  {
+    k: 'Export',
+    v: 'The whole board — every scene, requirement and discovered asset — exports to CSV or JSON.',
+  },
+];
 
 export default function LandingPage() {
   const router = useRouter();
-  const [loadingDemo, setLoadingDemo] = useState(false);
+  const [demoState, setDemoState] = useState<'idle' | 'loading'>('idle');
+  const [error, setError] = useState<string | null>(null);
 
-  const handleRunDemo = async () => {
-    setLoadingDemo(true);
+  const runSample = async () => {
+    setDemoState('loading');
+    setError(null);
     try {
-      const demoProject = await api.createDemoProject();
-      router.push(`/projects/${demoProject.id}`);
+      const project = await api.createDemoProject();
+      router.push(`/projects/${project.id}?autostart=1`);
     } catch (err) {
-      console.error('Failed to create demo project:', err);
-      setLoadingDemo(false);
+      setError(err instanceof ApiError ? err.message : 'Could not start the sample run.');
+      setDemoState('idle');
     }
   };
 
   return (
-    <div className="space-y-24 py-8">
-      {/* Hero Section */}
-      <section className="text-center space-y-8 max-w-4xl mx-auto pt-8">
-        <div className="inline-flex items-center space-x-2 px-4 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold uppercase tracking-wider">
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>AI Visual Research Engine for Creators</span>
+    <div className="pb-24">
+      {/* ── Hero: asymmetric, left-aligned, no centred gradient headline ────── */}
+      <section className="grid gap-10 border-b border-line py-14 lg:grid-cols-12 lg:gap-12 lg:py-20">
+        <div className="lg:col-span-5">
+          <p className="eyebrow">Visual research for editors</p>
+
+          <h1 className="mt-5 text-4xl font-semibold leading-[1.05] tracking-tight text-bone sm:text-5xl">
+            Turn a script into
+            <br />a visual plan.
+          </h1>
+
+          <p className="mt-6 max-w-md text-[0.95rem] leading-relaxed text-muted">
+            SLAYERS reads your narration, works out what each moment needs to show,
+            searches real sources for it, ranks what comes back, and lays the whole
+            thing out as a board you can work from.
+          </p>
+
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <Link href="/projects/new" className="btn-primary">
+              Start with a script
+            </Link>
+            <a href="#how" className="btn-ghost">
+              See how it works
+            </a>
+          </div>
+
+          <div className="mt-6 border-t border-lineSoft pt-6">
+            <button
+              type="button"
+              onClick={runSample}
+              disabled={demoState === 'loading'}
+              className="font-mono text-label uppercase text-ochre underline underline-offset-4 transition-colors hover:text-bone disabled:opacity-50"
+            >
+              {demoState === 'loading'
+                ? 'Starting sample run…'
+                : 'Or run the built-in sample script →'}
+            </button>
+            <p className="mt-2 font-mono text-micro uppercase text-faint">
+              Runs the real pipeline against live sources
+            </p>
+          </div>
+
+          {error && (
+            <div className="mt-5 max-w-md">
+              <ErrorNotice message={error} onRetry={runSample} />
+            </div>
+          )}
         </div>
 
-        <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight text-white leading-tight">
-          Turn your script into a <br className="hidden sm:inline" />
-          <span className="bg-gradient-to-r from-blue-400 via-indigo-300 to-sky-400 bg-clip-text text-transparent">
-            ready-to-edit visual asset package
-          </span>
-        </h1>
+        {/* Product representation: script → requirement → ranked candidates. */}
+        <div className="lg:col-span-7">
+          <figure className="panel">
+            <figcaption className="flex items-center justify-between border-b border-line px-4 py-2.5">
+              <span className="eyebrow">Example board layout</span>
+              <span className="font-mono text-micro uppercase text-faint">Scene 03</span>
+            </figcaption>
 
-        <p className="text-lg sm:text-xl text-gray-300 max-w-2xl mx-auto leading-relaxed">
-          Editors spend hours searching for B-roll, screenshots, product footage, and graphics.
-          <strong className="text-white font-semibold"> SLAYERS automates visual discovery and organizes relevant assets scene-by-scene.</strong>
-        </p>
+            <div className="grid divide-y divide-lineSoft md:grid-cols-3 md:divide-x md:divide-y-0">
+              {/* 1 — the script */}
+              <div className="p-4">
+                <p className="eyebrow">Narration</p>
+                <ol className="mt-3 space-y-2">
+                  {EXAMPLE_LINES.map((line, i) => (
+                    <li
+                      key={line}
+                      className={`border-l-2 pl-3 text-xs leading-relaxed ${
+                        i === 2
+                          ? 'border-ochre text-bone'
+                          : 'border-lineSoft text-faint'
+                      }`}
+                    >
+                      {line}
+                    </li>
+                  ))}
+                </ol>
+              </div>
 
-        {/* CTA Buttons */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
-          <Link
-            href="/projects/new"
-            className="w-full sm:w-auto inline-flex items-center justify-center space-x-3 text-base font-bold text-white bg-blue-600 hover:bg-blue-500 px-8 py-4 rounded-xl shadow-xl shadow-blue-600/30 transition active:scale-95"
-          >
-            <span>Start a Project</span>
-            <ArrowRight className="w-5 h-5" />
+              {/* 2 — what the engine decided */}
+              <div className="space-y-4 p-4">
+                <div>
+                  <p className="eyebrow">Visual intent</p>
+                  <p className="mt-2 inline-block border border-ochre/50 bg-ochre-wash px-2 py-1 font-mono text-label uppercase text-ochre">
+                    Product UI
+                  </p>
+                </div>
+                <div>
+                  <p className="eyebrow">Search query</p>
+                  <p className="mt-2 font-mono text-xs text-bone">ide ai pair programmer editor</p>
+                </div>
+                <div>
+                  <p className="eyebrow">Timecode</p>
+                  <p className="mt-2 font-mono text-xs text-bone">00:16 – 00:24</p>
+                </div>
+              </div>
+
+              {/* 3 — ranked candidates (structure only, no invented artwork) */}
+              <div className="p-4">
+                <p className="eyebrow">Ranked candidates</p>
+                <ul className="mt-3 space-y-2.5">
+                  {[
+                    { score: 92, label: 'Recommended', src: 'Wikimedia Commons', tone: 'text-sage' },
+                    { score: 74, label: 'Alternative', src: 'Pexels', tone: 'text-slate' },
+                    { score: 43, label: 'Flagged', src: 'Brand source', tone: 'text-rust' },
+                  ].map((c) => (
+                    <li key={c.score} className="border border-lineSoft">
+                      <div className="flex items-stretch">
+                        <div
+                          aria-hidden="true"
+                          className="flex h-12 w-16 shrink-0 items-center justify-center border-r border-lineSoft bg-raised font-mono text-micro text-faint"
+                        >
+                          IMG
+                        </div>
+                        <div className="flex min-w-0 flex-1 items-center justify-between px-3">
+                          <div className="min-w-0">
+                            <p className={`font-mono text-label ${c.tone}`}>{c.label}</p>
+                            <p className="truncate font-mono text-micro uppercase text-faint">
+                              {c.src}
+                            </p>
+                          </div>
+                          <span className={`font-mono text-sm ${c.tone}`}>{c.score}</span>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <p className="border-t border-line px-4 py-2.5 font-mono text-micro uppercase text-faint">
+              Illustration of the board structure — run a script to see real results
+            </p>
+          </figure>
+        </div>
+      </section>
+
+      {/* ── Pipeline rail ───────────────────────────────────────────────────── */}
+      <section id="how" className="scroll-mt-20 border-b border-line py-14">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="text-xl font-semibold tracking-tight text-bone">
+            What happens to your script
+          </h2>
+          <p className="font-mono text-micro uppercase text-faint">Five stages, one pass</p>
+        </div>
+
+        <ol className="mt-8 grid gap-px border border-line bg-line sm:grid-cols-2 lg:grid-cols-5">
+          {STAGES.map((s) => (
+            <li key={s.n} className="bg-panel p-5">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-label text-ochre">{s.n}</span>
+                <span aria-hidden="true" className="h-px flex-1 bg-line" />
+              </div>
+              <h3 className="mt-3 font-mono text-label uppercase text-bone">{s.name}</h3>
+              <p className="mt-2 text-xs leading-relaxed text-muted">{s.body}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* ── Capability spec sheet (definition list, not feature cards) ──────── */}
+      <section className="py-14">
+        <h2 className="text-xl font-semibold tracking-tight text-bone">
+          What the engine actually does
+        </h2>
+
+        <dl className="mt-8 divide-y divide-lineSoft border-y border-line">
+          {CAPABILITIES.map((c) => (
+            <div key={c.k} className="grid gap-1 py-4 sm:grid-cols-12 sm:gap-6">
+              <dt className="font-mono text-label uppercase text-bone sm:col-span-3">{c.k}</dt>
+              <dd className="text-sm leading-relaxed text-muted sm:col-span-9">{c.v}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <div className="mt-10 flex flex-wrap items-center gap-4">
+          <Link href="/projects/new" className="btn-primary">
+            Start with a script
           </Link>
-
-          <button
-            onClick={handleRunDemo}
-            disabled={loadingDemo}
-            className="w-full sm:w-auto inline-flex items-center justify-center space-x-3 text-base font-semibold text-gray-200 bg-surface border border-surfaceBorder hover:border-gray-600 hover:text-white px-8 py-4 rounded-xl transition active:scale-95 disabled:opacity-50"
-          >
-            {loadingDemo ? (
-              <Zap className="w-5 h-5 text-amber-400 animate-spin" />
-            ) : (
-              <Play className="w-5 h-5 text-blue-400" />
-            )}
-            <span>{loadingDemo ? 'Building Demo Package...' : 'Try Sample Demo Project'}</span>
-          </button>
-        </div>
-      </section>
-
-      {/* Core Workflow Steps */}
-      <section className="space-y-8">
-        <div className="text-center space-y-2">
-          <h2 className="text-2xl font-bold text-white uppercase tracking-wider">The 4-Step Pipeline</h2>
-          <p className="text-sm text-gray-400">How SLAYERS turns raw script into organized visuals in seconds</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div className="bg-surface border border-surfaceBorder rounded-2xl p-6 space-y-4 relative overflow-hidden">
-            <div className="w-10 h-10 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold text-lg">
-              1
-            </div>
-            <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-              <Layers className="w-5 h-5 text-blue-400" />
-              <span>Analyze</span>
-            </h3>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Segments script into distinct narrative beats and calculates precise timeline intervals.
-            </p>
-          </div>
-
-          <div className="bg-surface border border-surfaceBorder rounded-2xl p-6 space-y-4 relative overflow-hidden">
-            <div className="w-10 h-10 rounded-xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center font-bold text-lg">
-              2
-            </div>
-            <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-              <Search className="w-5 h-5 text-indigo-400" />
-              <span>Discover</span>
-            </h3>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Distinguishes generic stock from specific product UI references and queries asset providers.
-            </p>
-          </div>
-
-          <div className="bg-surface border border-surfaceBorder rounded-2xl p-6 space-y-4 relative overflow-hidden">
-            <div className="w-10 h-10 rounded-xl bg-purple-600/20 text-purple-400 flex items-center justify-center font-bold text-lg">
-              3
-            </div>
-            <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-              <ShieldCheck className="w-5 h-5 text-purple-400" />
-              <span>Verify</span>
-            </h3>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Scores relevance from 0–100 and verifies Creative Commons & commercial license usage notes.
-            </p>
-          </div>
-
-          <div className="bg-surface border border-surfaceBorder rounded-2xl p-6 space-y-4 relative overflow-hidden">
-            <div className="w-10 h-10 rounded-xl bg-emerald-600/20 text-emerald-400 flex items-center justify-center font-bold text-lg">
-              4
-            </div>
-            <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-              <CheckCircle2 className="w-5 h-5 text-emeraldGlow" />
-              <span>Organize</span>
-            </h3>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Maps recommended & alternative assets directly to scene cards ready for editor download.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Before vs After Comparison */}
-      <section className="bg-surface border border-surfaceBorder rounded-3xl p-8 sm:p-12 space-y-8 shadow-2xl">
-        <div className="text-center space-y-2">
-          <h2 className="text-2xl font-extrabold text-white">Why Editors Need SLAYERS</h2>
-          <p className="text-sm text-gray-400">Stop wasting half your editing time tab-switching on stock sites</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Before */}
-          <div className="bg-background/60 border border-red-500/20 rounded-2xl p-6 space-y-4">
-            <div className="flex items-center space-x-2 text-red-400 font-bold text-sm uppercase tracking-wider">
-              <span>BEFORE SLAYERS</span>
-            </div>
-            <ul className="space-y-3 text-xs text-gray-400 leading-relaxed">
-              <li className="flex items-start space-x-2">
-                <span className="text-red-500 font-bold">&times;</span>
-                <span>Manually read script line by line to figure out visuals</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <span className="text-red-500 font-bold">&times;</span>
-                <span>Open 30 tabs on generic stock video websites</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <span className="text-red-500 font-bold">&times;</span>
-                <span>Struggle finding specific product interfaces & logos</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <span className="text-red-500 font-bold">&times;</span>
-                <span>Manually verify licenses and download separate files</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <span className="text-red-500 font-bold">&times;</span>
-                <span>Spend ~2–3 hours on research before touching timeline</span>
-              </li>
-            </ul>
-          </div>
-
-          {/* After */}
-          <div className="bg-blue-950/20 border border-blue-500/30 rounded-2xl p-6 space-y-4">
-            <div className="flex items-center space-x-2 text-emeraldGlow font-bold text-sm uppercase tracking-wider">
-              <Sparkles className="w-4 h-4" />
-              <span>AFTER SLAYERS</span>
-            </div>
-            <ul className="space-y-3 text-xs text-gray-200 leading-relaxed">
-              <li className="flex items-start space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emeraldGlow shrink-0 mt-0.5" />
-                <span>Paste script and get automatic scene breakdown</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emeraldGlow shrink-0 mt-0.5" />
-                <span>Smart detection differentiates generic B-roll from specific product UI</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emeraldGlow shrink-0 mt-0.5" />
-                <span>Multi-provider discovery fetches real assets with 0–100 relevance score</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emeraldGlow shrink-0 mt-0.5" />
-                <span>Clear Creative Commons & usage license notes for every clip</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emeraldGlow shrink-0 mt-0.5" />
-                <span>Ready in 15 seconds with downloadable visual manifest</span>
-              </li>
-            </ul>
-          </div>
+          <Link href="/projects" className="btn-ghost">
+            Open existing boards
+          </Link>
         </div>
       </section>
     </div>

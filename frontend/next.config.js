@@ -1,17 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  images: {
-    remotePatterns: [
-      { protocol: 'https', hostname: 'upload.wikimedia.org' },
-      { protocol: 'https', hostname: 'commons.wikimedia.org' },
-      { protocol: 'https', hostname: 'images.pexels.com' },
-      { protocol: 'https', hostname: 'images.unsplash.com' },
-      { protocol: 'https', hostname: 'logo.clearbit.com' },
-      { protocol: 'https', hostname: 'www.google.com' },
-      { protocol: 'https', hostname: 'en.wikipedia.org' },
-    ],
-    unoptimized: true,
-  },
+  reactStrictMode: true,
+  // Asset thumbnails come from an open-ended set of provider CDNs (Wikimedia,
+  // Pexels, Unsplash, brand hosts, and whatever a new provider adds), so the
+  // asset cards use plain <img> rather than next/image. No remote allow-list is
+  // needed, and a new provider can never be silently blocked at render time.
+  poweredByHeader: false,
 };
 
 module.exports = nextConfig;
