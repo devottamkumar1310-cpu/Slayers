@@ -1,0 +1,53 @@
+# Render blueprint for the SLAYERS FastAPI backend.
+#
+# Minimal by design: it deploys the existing application unchanged. No worker,
+# queue, or managed database is declared, because the app does not require one
+# to run — asset discovery happens in FastAPI background tasks inside this same
+# process.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> select this repository.
+#
+# After the service is live, set NEXT_PUBLIC_API_URL in the Vercel project to
+# the resulting https URL and redeploy the frontend — Next.js inlines
+# NEXT_PUBLIC_* at build time, so changing it without a rebuild has no effect.
+#
+# Storage note: the free plan has no persistent disk, so the default SQLite
+# database lives on the instance's ephemeral filesystem and is recreated (empty)
+# whenever the service restarts or redeploys. The schema is created
+# automatically at startup, so no migration step is needed. For durable
+# projects, attach a disk and point DATABASE_URL at it, or provision Postgres
+# and set DATABASE_URL to its connection string — the app reads whatever
+# DATABASE_URL provides.
+
+services:
+  - type: web
+    name: slayers-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.15"
+
+      # Rule-based analysis is the default and needs no credentials.
+      - key: AI_PROVIDER
+        value: auto
+
+      # Comma-separated list of allowed frontend origins for CORS.
+      # Set to the deployed Vercel URL. *.vercel.app previews are already
+      # permitted by a regex in app/main.py.
+      - key: FRONTEND_URL
+        sync: false
+
+      # All optional. The pipeline runs without them using Wikimedia Commons
+      # and Wikipedia, which require no API key. Unset providers report
+      # themselves unconfigured and are skipped, never failed.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PEXELS_API_KEY
+        sync: false
+      - key: UNSPLASH_ACCESS_KEY
+        sync: false

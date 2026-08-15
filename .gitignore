@@ -50,3 +50,6 @@ pnpm-debug.log*
 *~
 .DS_Store
 Thumbs.db
+
+# Vercel CLI project linkage (contains project/org identifiers)
+.vercel
