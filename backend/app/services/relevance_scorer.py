@@ -18,6 +18,8 @@ import re
 import logging
 from typing import Dict, Any, Tuple
 
+from app.services.entity_extraction import primary_entity
+from app.services.intent_policy import provider_affinity, type_compatibility
 from app.services.providers.base import DiscoveredAssetCandidate
 
 logger = logging.getLogger("slayers.relevance_scorer")
@@ -74,48 +76,62 @@ class RelevanceScorer:
         query_tokens = _tokenize(req_query)
         title_tokens = _tokenize(candidate.title)
         segment_tokens = _tokenize(segment_text)
+        haystack = f"{candidate.title} {candidate.source_url} {candidate.asset_url}".lower()
 
-        # ── 1. Semantic relevance (0–35) ─────────────────────────────────────
+        # ── 1. Semantic relevance (0-35) ─────────────────────────────────────
+        # Token overlap, plus a bonus when the named entity behind the query
+        # actually appears in the asset. An exact entity hit is the strongest
+        # signal we have that this is the right subject and not a coincidence
+        # of common words.
         if query_tokens:
             direct_overlap = query_tokens & title_tokens
-            # Partial substring matches: e.g. "github" matches "github-copilot"
             partial = sum(
                 1 for qt in query_tokens
                 if any(qt in tt for tt in title_tokens) and qt not in direct_overlap
             )
             matched = len(direct_overlap) + partial
-            semantic = min(35, int((matched / len(query_tokens)) * 35))
+            semantic = min(28, int((matched / len(query_tokens)) * 28))
         else:
-            semantic = 18  # no query → baseline
+            semantic = 14  # no query -> baseline
 
-        # Bonus: if candidate has no query-word overlap but title has related
-        # topic words from the segment (partial topical relevance)
         if semantic == 0 and (query_tokens & segment_tokens):
-            semantic = 10
+            semantic = 8
 
-        # ── 2. Visual type match (0–25) ───────────────────────────────────────
-        cand_type = candidate.asset_type.lower()
-        if req_type in _IMAGE_INTENTS and cand_type == "image":
-            type_score = 25
-        elif req_type in _VIDEO_INTENTS and cand_type == "video":
-            type_score = 25
-        elif req_type == "logo" and cand_type == "logo":
-            type_score = 25
-        elif cand_type in ("image", "video"):
-            type_score = 15
-        else:
-            type_score = 10
+        # Read the entity from the narration first: the segment text carries
+        # natural capitalisation, whereas a search query may arrive lower-cased
+        # (from Gemini, or hand-written) and would yield no entity at all.
+        entity = primary_entity(segment_text) or primary_entity(req_query) or ""
+        entity_hit = False
+        if entity:
+            parts = [p for p in entity.lower().split() if len(p) >= _MIN_TOKEN_LEN]
+            if parts and all(p in haystack for p in parts):
+                entity_hit = True
+                semantic = min(35, semantic + 7)
 
-        # ── 3. Source quality (0–20) ──────────────────────────────────────────
+        # ── 2. Visual type match (0-25) ───────────────────────────────────────
+        # Delegated to intent_policy so providers, discovery and scoring agree.
+        # A scanned document scores 0 here against a product-UI requirement.
+        compatibility = type_compatibility(req_type, candidate.asset_type)
+        type_score = int(round(25 * compatibility))
+
+        # ── 3. Source quality (0-20), intent-aware ────────────────────────────
         src_lower = candidate.source.lower()
-        source_score = next(
+        base_tier = next(
             (v for k, v in _SOURCE_TIERS.items() if k in src_lower),
             13,  # unknown / new source baseline
         )
+        source_score = max(0, min(20, int(round(base_tier * provider_affinity(req_type, candidate.source)))))
 
-        # ── 4. Context alignment (0–20) ───────────────────────────────────────
+        # ── 4. Context alignment (0-20) ───────────────────────────────────────
         seg_overlap = segment_tokens & title_tokens
-        context_score = min(20, len(seg_overlap) * 4)
+        context_score = min(16, len(seg_overlap) * 4)
+        # Domain relevance: the entity appearing in the URL means the asset is
+        # hosted on / filed under that subject, not merely titled with it.
+        if entity_hit and any(
+            p in f"{candidate.source_url} {candidate.asset_url}".lower()
+            for p in entity.lower().split()
+        ):
+            context_score = min(20, context_score + 4)
 
         # ── Total ─────────────────────────────────────────────────────────────
         raw = semantic + type_score + source_score + context_score
@@ -126,23 +142,37 @@ class RelevanceScorer:
             f"Semantic={semantic}/35, Type={type_score}/25, "
             f"Source={source_score}/20, Context={context_score}/20"
         )
+        mismatch_note = ""
+        if compatibility == 0.0:
+            mismatch_note = (
+                f" Asset kind '{candidate.asset_type}' does not suit a "
+                f"'{req_type}' requirement."
+            )
+        elif compatibility < 1.0:
+            mismatch_note = (
+                f" Usable substitute: '{candidate.asset_type}' for a "
+                f"'{req_type}' slot."
+            )
+
+        entity_note = f" Matches '{entity}'." if entity_hit else ""
+
         if total >= 80:
             status = "recommended"
             notes = (
                 f"High confidence match ({total}/100). "
-                f"Strong keyword alignment with '{req_query}'. {breakdown}"
+                f"Strong alignment with '{req_query}'.{entity_note}{mismatch_note} {breakdown}"
             )
         elif total >= 55:
             status = "alternative"
             notes = (
                 f"Good alternative ({total}/100). "
-                f"Core topic matches with suitable media format. {breakdown}"
+                f"Core topic matches with suitable media format.{entity_note}{mismatch_note} {breakdown}"
             )
         else:
             status = "flagged"
             notes = (
                 f"Low confidence ({total}/100). "
-                f"Topically adjacent — verify visual framing before export. {breakdown}"
+                f"Topically adjacent - verify visual framing before export.{entity_note}{mismatch_note} {breakdown}"
             )
 
         return total, notes, status

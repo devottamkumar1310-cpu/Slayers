@@ -15,6 +15,7 @@ from collections import defaultdict
 from typing import List, Dict, Any, Tuple, Optional
 
 from app.core.config import settings
+from app.services.intent_policy import admits
 from app.services.providers.base import AssetSearchProvider, DiscoveredAssetCandidate
 from app.services.providers.wikimedia import WikimediaProvider
 from app.services.providers.pexels import PexelsProvider
@@ -100,6 +101,8 @@ class AssetDiscoveryEngine:
         seen_urls: set = set()
         seen_provider_ids: set = set()
 
+        rejected_kinds: Dict[str, int] = defaultdict(int)
+
         for name, candidates, error in provider_results:
             if error:
                 stats["warnings"].append(error)
@@ -116,9 +119,23 @@ class AssetDiscoveryEngine:
                     continue
                 if c.provider_id:
                     seen_provider_ids.add(dedup_key)
+
+                # Right KIND of asset before high score: a scanned document
+                # never competes with screenshots for a product_ui slot.
+                if not admits(asset_type, c.asset_type):
+                    rejected_kinds[c.asset_type] += 1
+                    continue
+
                 all_candidates.append(c)
                 accepted += 1
             stats["found"][name] = accepted
+
+        if rejected_kinds:
+            stats["filtered"] = dict(rejected_kinds)
+            logger.debug(
+                "Filtered %d candidates unsuited to intent '%s': %s",
+                sum(rejected_kinds.values()), asset_type, dict(rejected_kinds),
+            )
 
         # ── Score + sort ──────────────────────────────────────────────────────
         scored: List[Dict[str, Any]] = []

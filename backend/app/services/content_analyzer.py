@@ -72,7 +72,10 @@ class SegmentSchema(BaseModel):
 _INTENT_RULES: List[tuple] = [
     # highest specificity first
     (r"\b(screencast|walkthrough|live demo|demo video|screen recording)\b",          "screen_recording"),
-    (r"\b(ui|interface|dashboard|app|tool|software|click|button|feature|toggle|menu|settings|plugin|extension)\b",  "product_ui"),
+    # "editor" / "ide" are listed here so that lines about code editors resolve
+    # to product_ui. Without them "Visual Studio Code" fell through to the
+    # location rule, which matches the bare word "studio".
+    (r"\b(ui|interface|dashboard|app|tool|software|click|button|feature|toggle|menu|settings|plugin|extension|editor|ide)\b",  "product_ui"),
     (r"\b(website|site|url|page|online|browser|domain|landing page|homepage|webapp)\b", "website"),
     (r"\b(chart|graph|metric|percentage|percent|revenue|kpi|analytics|statistic|growth rate|data)\b", "data_visualization"),
     (r"\b(architecture|flowchart|system diagram|pipeline|infrastructure|database schema|er diagram)\b", "diagram"),

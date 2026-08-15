@@ -235,14 +235,20 @@ def get_summary(project_id: str, db: Session = Depends(get_db)):
 
 # ── Demo ─────────────────────────────────────────────────────────────────────
 
+# Demo script.
+#
+# Chosen to exercise the parts of the pipeline that carry the product: named
+# products and companies (so entity extraction and brand sources engage), a
+# code-editor line (product_ui), a measurable claim (data_visualization), a
+# physical setting (location), and a people line (person). Nothing here is
+# hard-coded downstream — the demo runs the same pipeline as any other script.
 _DEMO_SCRIPT = """\
-The software industry is undergoing a massive shift as AI coding agents emerge.
-Developers no longer spend hours writing boilerplate code manually.
-Instead, intelligent agents analyze repositories, create implementation plans, and write multi-file features.
-For example, modern IDE interfaces now feature AI pair-programmers integrated right into the editor window.
-This transformation allows small engineering teams to build complex software in a fraction of the time.
-Companies like GitHub, Google, and OpenAI are shipping AI tools that automate repetitive coding tasks.
-The market data shows developer productivity increasing by 30 to 55 percent with AI-assisted workflows.
+GitHub Copilot has changed the way developers write software.
+Inside Visual Studio Code, the editor now suggests entire functions as you type.
+OpenAI trained the underlying model on billions of lines of public source code.
+Microsoft reports that developers accept roughly thirty percent of these suggestions.
+Behind every suggestion sits a data center running inference at enormous scale.
+For a small engineering team, that means shipping features that once needed a far larger staff.
 """.strip()
 
 

@@ -16,18 +16,15 @@ from typing import List, Dict, Any
 from pydantic import BaseModel, field_validator
 from app.core.config import settings
 from app.services.content_analyzer import VALID_INTENTS
+from app.services.entity_extraction import (
+    content_terms,
+    build_search_query,
+    primary_entity,
+)
 
 logger = logging.getLogger("slayers.visual_intent")
 
 VALID_PRIORITIES = {"high", "medium", "low"}
-
-_STOPWORDS = frozenset({
-    "the", "this", "that", "there", "these", "those", "when", "what",
-    "where", "how", "with", "from", "they", "their", "your", "today",
-    "here", "also", "every", "each", "some", "many", "such", "instead",
-    "another", "our", "have", "been", "were", "will", "would", "which",
-    "into", "over", "about", "after", "before", "during", "through",
-})
 
 
 class RequirementSchema(BaseModel):
@@ -119,145 +116,118 @@ class VisualIntentEngine:
         text = segment.get("text", "")
         intent = segment.get("visual_intent", "stock_footage")
 
-        # Extract likely proper nouns (capitalized words not in stopwords)
-        tokens = text.split()
-        proper_nouns = [
-            t.strip(".,!?\"'();:")
-            for t in tokens
-            if t.istitle() and len(t) > 2 and t.lower() not in _STOPWORDS
-        ]
-        product_name = " ".join(proper_nouns[:2]) if proper_nouns else ""
+        # Entity recovery and query construction live in entity_extraction; see
+        # that module for why the previous istitle()-based approach discarded
+        # GitHub / OpenAI / AI and produced document-only search results.
+        entity = primary_entity(text)
+        subject = entity or " ".join(content_terms(text, count=2)) or "technology"
 
-        # Meaningful content words for fallback queries
-        content_words = [
-            w.strip(".,!?\"'();:")
-            for w in tokens
-            if len(w) > 4 and w.lower() not in _STOPWORDS
-        ]
-        content_phrase = " ".join(content_words[:4]) if content_words else "technology"
-
-        req = self._build_requirement(intent, product_name, content_phrase)
+        req = self._build_requirement(intent, subject, text)
         results = [req] if req else []
 
-        # Add a generic B-roll as secondary if primary is very specific
-        if intent in ("product_ui", "logo", "website", "data_visualization") and content_words:
+        # Secondary B-roll for scenes whose primary asset is very specific.
+        if intent in ("product_ui", "logo", "website", "data_visualization"):
+            broll_subject = " ".join(content_terms(text, count=2)) or subject
             results.append({
                 "asset_type": "stock_footage",
-                "description": f"Supporting B-roll footage for: {content_phrase}",
-                "search_query": f"{content_phrase} technology",
+                "description": f"Supporting B-roll for: {broll_subject}",
+                "search_query": build_search_query(text, "stock_footage"),
                 "priority": "low",
                 "reason": "Secondary B-roll for scene pacing.",
             })
 
         return self._validate_requirements(results)
 
-    def _build_requirement(self, intent: str, product: str, content: str) -> Dict[str, Any]:
-        p = product or content or "technology"
-        templates: Dict[str, Dict[str, Any]] = {
-            "product_ui": {
-                "asset_type": "product_ui",
-                "description": f"UI/dashboard screenshot of {p}",
-                "search_query": f"{p} interface dashboard",
-                "priority": "high",
-                "reason": "Narration describes specific product functionality.",
-            },
-            "screen_recording": {
-                "asset_type": "screen_recording",
-                "description": f"Screen recording or walkthrough of {p}",
-                "search_query": f"{p} screencast walkthrough",
-                "priority": "high",
-                "reason": "Narration calls for live product demonstration.",
-            },
-            "website": {
-                "asset_type": "website",
-                "description": f"Official landing page / website for {p}",
-                "search_query": f"{p} official website homepage",
-                "priority": "high",
-                "reason": "Script references an online platform or destination.",
-            },
-            "logo": {
-                "asset_type": "logo",
-                "description": f"High-resolution transparent logo for {p}",
-                "search_query": f"{p} official logo transparent",
-                "priority": "high",
-                "reason": "Brand identity required for scene.",
-            },
-            "screenshot": {
-                "asset_type": "screenshot",
-                "description": f"Screenshot showing {p} in action",
-                "search_query": f"{p} screenshot",
-                "priority": "high",
-                "reason": "Visual proof of product feature.",
-            },
-            "data_visualization": {
-                "asset_type": "data_visualization",
-                "description": f"Chart or graph showing metrics related to {p}",
-                "search_query": f"{p} data chart growth statistics",
-                "priority": "high",
-                "reason": "Reinforces statistical or metric claims in narration.",
-            },
-            "diagram": {
-                "asset_type": "diagram",
-                "description": f"System architecture or flow diagram for {p}",
-                "search_query": f"{p} architecture diagram flowchart",
-                "priority": "high",
-                "reason": "Explains technical structure or pipeline.",
-            },
-            "news_reference": {
-                "asset_type": "news_reference",
-                "description": f"News headline or press coverage about {p}",
-                "search_query": f"{p} news announcement press",
-                "priority": "medium",
-                "reason": "Provides journalistic credibility for the claim.",
-            },
-            "historical": {
-                "asset_type": "historical",
-                "description": f"Archival or historical image related to {p}",
-                "search_query": f"historical {p} archive vintage",
-                "priority": "medium",
-                "reason": "Sets chronological context for narration.",
-            },
-            "document": {
-                "asset_type": "document",
-                "description": f"Document, report or whitepaper on {p}",
-                "search_query": f"{p} whitepaper report document",
-                "priority": "medium",
-                "reason": "Provides written reference material for scene.",
-            },
-            "illustration": {
-                "asset_type": "illustration",
-                "description": f"Custom illustration or concept art for {p}",
-                "search_query": f"{p} illustration concept art vector",
-                "priority": "medium",
-                "reason": "Adds visual appeal or explanatory metaphor.",
-            },
-            "person": {
-                "asset_type": "person",
-                "description": f"Photo or footage of {p or 'professional'} at work",
-                "search_query": f"{p or 'software engineer'} professional portrait",
-                "priority": "medium",
-                "reason": "Humanises the subject or team referenced.",
-            },
-            "location": {
-                "asset_type": "location",
-                "description": f"Photo or footage of {p or 'office'} environment",
-                "search_query": f"{p or 'tech office'} location workspace",
-                "priority": "medium",
-                "reason": "Establishes physical setting referenced in narration.",
-            },
-        }
-        if intent in templates:
-            return templates[intent]
+    def _build_requirement(self, intent: str, subject: str, text: str) -> Dict[str, Any]:
+        """
+        Build the primary requirement for a segment.
 
-        # Default: generic stock footage
+        Descriptions and reasons are human-facing copy; the search_query is
+        always produced by build_search_query so that every intent gets the
+        short, entity-led form that providers actually match on.
+        """
+        p = subject or "technology"
+        copy: Dict[str, tuple] = {
+            "product_ui": (
+                f"UI or dashboard screenshot of {p}",
+                "high",
+                "Narration describes specific product functionality.",
+            ),
+            "screen_recording": (
+                f"Screen recording or walkthrough of {p}",
+                "high",
+                "Narration calls for live product demonstration.",
+            ),
+            "website": (
+                f"Official landing page or website for {p}",
+                "high",
+                "Script references an online platform or destination.",
+            ),
+            "logo": (
+                f"High-resolution logo or brand mark for {p}",
+                "high",
+                "Brand identity required for scene.",
+            ),
+            "screenshot": (
+                f"Screenshot showing {p} in use",
+                "high",
+                "Visual proof of product feature.",
+            ),
+            "data_visualization": (
+                f"Chart or graph showing metrics related to {p}",
+                "high",
+                "Reinforces statistical or metric claims in narration.",
+            ),
+            "diagram": (
+                f"Architecture or flow diagram for {p}",
+                "high",
+                "Explains technical structure or pipeline.",
+            ),
+            "news_reference": (
+                f"News or press coverage about {p}",
+                "medium",
+                "Provides journalistic credibility for the claim.",
+            ),
+            "historical": (
+                f"Archival or historical image related to {p}",
+                "medium",
+                "Sets chronological context for narration.",
+            ),
+            "document": (
+                f"Document, report or whitepaper on {p}",
+                "medium",
+                "Provides written reference material for scene.",
+            ),
+            "illustration": (
+                f"Illustration or concept art for {p}",
+                "medium",
+                "Adds visual appeal or explanatory metaphor.",
+            ),
+            "person": (
+                f"Photo or footage of {p}",
+                "medium",
+                "Humanises the subject or team referenced.",
+            ),
+            "location": (
+                f"Photo or footage of {p}",
+                "medium",
+                "Establishes physical setting referenced in narration.",
+            ),
+        }
+
+        description, priority, reason = copy.get(
+            intent,
+            (f"B-roll footage for: {p}", "medium", "Background B-roll during narration."),
+        )
+        resolved_intent = intent if intent in copy else "stock_footage"
+
         return {
-            "asset_type": "stock_footage",
-            "description": f"Cinematic B-roll footage for: {content}",
-            "search_query": f"{content} technology cinematic",
-            "priority": "medium",
-            "reason": "Background B-roll during narration.",
+            "asset_type": resolved_intent,
+            "description": description,
+            "search_query": build_search_query(text, resolved_intent),
+            "priority": priority,
+            "reason": reason,
         }
-
     # ── Validation ────────────────────────────────────────────────────────────
     def _validate_requirements(self, raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         validated = []
